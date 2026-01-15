@@ -30,7 +30,7 @@ A REST API service for managing Firecracker microVMs on a dedicated host. Suppor
                     │             :22001 → 172.16.0.2:22  │
                     │             :22002 → 172.16.0.3:22  │
                     │                                     │
-                    │ br0 (172.16.0.1/24)                 │
+                    │ br0 (172.16.0.1/16)                 │
                     │   ├── tap0 ── VM 1 (172.16.0.2)     │
                     │   └── tap1 ── VM 2 (172.16.0.3)     │
                     │                                     │
@@ -192,6 +192,32 @@ echo "==> Provisioning complete!"
 - Verify /dev/kvm exists and is accessible
 - Download compatible Linux kernel (5.10 recommended)
 
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Check KVM access
+if [[ ! -e /dev/kvm ]]; then
+  echo "ERROR: /dev/kvm not found. Is KVM enabled?"
+  exit 1
+fi
+
+# Download Firecracker binary
+FC_VERSION="1.7.0"
+curl -L -o /usr/local/bin/firecracker \
+  "https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VERSION}/firecracker-v${FC_VERSION}-x86_64"
+chmod +x /usr/local/bin/firecracker
+
+# Download compatible kernel
+KERNEL_VERSION="5.10.217"
+mkdir -p /var/lib/firecracker/kernel
+curl -L -o /var/lib/firecracker/kernel/vmlinux \
+  "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.7/x86_64/vmlinux-${KERNEL_VERSION}"
+
+echo "Firecracker $(firecracker --version) installed"
+echo "Kernel downloaded to /var/lib/firecracker/kernel/vmlinux"
+```
+
 **Manual Verification:**
 ```bash
 # Check KVM access
@@ -199,6 +225,9 @@ ls -la /dev/kvm
 
 # Check Firecracker binary
 firecracker --version
+
+# Check kernel exists
+ls -la /var/lib/firecracker/kernel/vmlinux
 ```
 
 #### 1.3 Storage Setup (`provision/storage.sh`)
@@ -219,7 +248,7 @@ mkdir -p /var/lib/firecracker
 mount -o loop /var/lib/firecracker.img /var/lib/firecracker
 
 # Add to fstab for persistence
-echo '/var/lib/firecracker.img /var/lib/firecracker btrfs loop 0 0' >> /etc/fstab
+echo '/var/lib/firecracker.img /var/lib/firecracker btrfs loop,defaults 0 0' >> /etc/fstab
 ```
 
 **Manual Verification:**
@@ -237,24 +266,56 @@ rm /var/lib/firecracker/test /var/lib/firecracker/test2
 - Create bridge br0 with IP 172.16.0.1/16
 - Enable IP forwarding
 - Set up NAT (MASQUERADE) for outbound traffic
-- Make settings persistent
+- Make settings persistent across reboot
 
 ```bash
-# Create bridge
-ip link add br0 type bridge
-ip addr add 172.16.0.1/16 dev br0
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Detect primary network interface (works on GCP, Hetzner, etc.)
+PRIMARY_IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+echo "Detected primary interface: $PRIMARY_IFACE"
+
+# Create bridge (if not exists)
+if ! ip link show br0 &>/dev/null; then
+  ip link add br0 type bridge
+fi
+ip addr add 172.16.0.1/16 dev br0 2>/dev/null || true
 ip link set br0 up
 
 # Enable forwarding
 echo 1 > /proc/sys/net/ipv4/ip_forward
-echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+grep -q 'net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
 
-# NAT for outbound
-iptables -t nat -A POSTROUTING -s 172.16.0.0/16 -o eth0 -j MASQUERADE
-iptables -A FORWARD -i br0 -o eth0 -j ACCEPT
-iptables -A FORWARD -i eth0 -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+# NAT for outbound (using detected interface)
+iptables -t nat -C POSTROUTING -s 172.16.0.0/16 -o "$PRIMARY_IFACE" -j MASQUERADE 2>/dev/null || \
+  iptables -t nat -A POSTROUTING -s 172.16.0.0/16 -o "$PRIMARY_IFACE" -j MASQUERADE
+iptables -C FORWARD -i br0 -o "$PRIMARY_IFACE" -j ACCEPT 2>/dev/null || \
+  iptables -A FORWARD -i br0 -o "$PRIMARY_IFACE" -j ACCEPT
+iptables -C FORWARD -i "$PRIMARY_IFACE" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+  iptables -A FORWARD -i "$PRIMARY_IFACE" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# Persist iptables (install iptables-persistent or save to script)
+# Persist bridge config via systemd-networkd
+mkdir -p /etc/systemd/network
+cat > /etc/systemd/network/br0.netdev <<EOF
+[NetDev]
+Name=br0
+Kind=bridge
+EOF
+
+cat > /etc/systemd/network/br0.network <<EOF
+[Match]
+Name=br0
+
+[Network]
+Address=172.16.0.1/16
+EOF
+
+# Persist iptables rules
+apt-get install -y iptables-persistent
+netfilter-persistent save
+
+echo "Network setup complete"
 ```
 
 **Manual Verification:**
@@ -274,10 +335,10 @@ iptables -t nat -L -n | grep MASQUERADE
 - Save as debian-base template
 
 ```bash
-# Create rootfs
+# Create rootfs (use explicit Debian version for reproducibility)
 apt-get install -y debootstrap
 mkdir -p /tmp/rootfs
-debootstrap --include=openssh-server,iproute2,iputils-ping stable /tmp/rootfs
+debootstrap --include=openssh-server,iproute2,iputils-ping bookworm /tmp/rootfs http://deb.debian.org/debian
 
 # Configure for Firecracker
 chroot /tmp/rootfs /bin/bash <<'EOF'
@@ -296,14 +357,15 @@ sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_c
 # Set hostname
 echo "firecracker-vm" > /etc/hostname
 
-# Configure networking (will be overridden by kernel params)
+# Network is configured via kernel boot args, not /etc/network/interfaces
+# Just configure loopback, eth0 gets IP from kernel cmdline
 cat > /etc/network/interfaces <<'NETEOF'
 auto lo
 iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
 NETEOF
+
+# Configure DNS (use Google's public DNS)
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
 
 # Clean up
 apt-get clean
@@ -544,16 +606,35 @@ interface VM {
 - Track allocated IPs in memory
 - On startup: scan running VMs to rebuild allocation state
 
-#### 4.3 Port Allocation (Hash-based)
+#### 4.3 Port Allocation (Hash-based with Collision Detection)
 ```typescript
+const PORT_MIN = 22001;
+const PORT_MAX = 32000;
+
 function vmIdToPort(vmId: string): number {
   const hash = createHash('sha256').update(vmId).digest();
   const num = hash.readUInt32BE(0);
-  const PORT_MIN = 22001;
-  const PORT_MAX = 32000;
   return PORT_MIN + (num % (PORT_MAX - PORT_MIN + 1));
 }
+
+// Collision-safe allocation: if hash collides, linear probe to next free port
+function allocatePort(vmId: string, usedPorts: Set<number>): number {
+  let port = vmIdToPort(vmId);
+  const startPort = port;
+
+  while (usedPorts.has(port)) {
+    port = port + 1 > PORT_MAX ? PORT_MIN : port + 1;
+    if (port === startPort) {
+      throw new Error('No available ports');
+    }
+  }
+
+  usedPorts.add(port);
+  return port;
+}
 ```
+
+Note: `usedPorts` is derived from in-memory VM state, rebuilt on startup.
 
 #### 4.4 VM Creation
 ```
@@ -577,19 +658,30 @@ Response: 201 Created
 }
 ```
 
+**MAC Address Generation:**
+```typescript
+// Generate unique MAC from VM ID: AA:FC:xx:xx:xx:xx
+function vmIdToMac(vmId: string): string {
+  const hash = createHash('sha256').update(vmId).digest();
+  return `AA:FC:${hash.subarray(0, 4).toString('hex').match(/.{2}/g)!.join(':')}`;
+}
+// Example: vm-abc123 → AA:FC:3a:f2:91:c7
+```
+
 **Steps:**
 1. Validate template exists
 2. Allocate IP from pool
 3. Generate VM ID
-4. Calculate SSH port from ID
-5. Copy template rootfs with reflink: `cp --reflink=auto`
-6. Mount rootfs, inject SSH public key into /root/.ssh/authorized_keys, unmount
-7. Create TAP device, attach to bridge
-8. Start Firecracker process with Unix socket
-9. Configure VM via Firecracker API (kernel, rootfs, network, machine config)
-10. Start VM instance
-11. Start TCP proxy for SSH port
-12. Return VM details
+4. Calculate SSH port from ID (with collision detection)
+5. Generate MAC address from ID
+6. Copy template rootfs with reflink: `cp --reflink=auto`
+7. Mount rootfs, inject SSH public key into /root/.ssh/authorized_keys, unmount
+8. Create TAP device, attach to bridge
+9. Start Firecracker process with Unix socket
+10. Configure VM via Firecracker API (kernel, rootfs, network with MAC, machine config)
+11. Start VM instance
+12. Start TCP proxy for SSH port
+13. Return VM details
 
 #### 4.5 VM Listing
 ```
@@ -724,11 +816,40 @@ Response: 201 Created
 
 **Steps:**
 1. Validate VM exists
-2. Validate template_name doesn't already exist
-3. Sync/flush VM's rootfs (optional: pause VM briefly)
-4. Copy rootfs to templates directory with reflink
-5. Clear SSH authorized_keys in the template copy (so next VM gets fresh injection)
-6. Return template metadata
+2. Validate template_name (alphanumeric, hyphens, underscores only - prevent path traversal)
+3. Validate template_name doesn't already exist
+4. **Pause VM** via Firecracker API to ensure filesystem consistency
+5. Copy rootfs to templates directory with reflink
+6. **Resume VM** via Firecracker API
+7. Clear SSH authorized_keys in the template copy (so next VM gets fresh injection)
+8. Return template metadata
+
+**Pause/Resume for Consistency:**
+```typescript
+// Pause VM before copying rootfs (prevents write corruption)
+await fetch(`http://localhost/vm`, {
+  method: 'PATCH',
+  socketPath: vm.socketPath,
+  body: JSON.stringify({ state: 'Paused' })
+});
+
+// Copy with reflink (instant, COW)
+await $`cp --reflink=auto ${vm.rootfsPath} ${templatePath}`;
+
+// Resume VM (total pause ~100ms)
+await fetch(`http://localhost/vm`, {
+  method: 'PATCH',
+  socketPath: vm.socketPath,
+  body: JSON.stringify({ state: 'Resumed' })
+});
+```
+
+**Template Name Validation (prevent path traversal):**
+```typescript
+if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
+  throw new Error('Invalid template name: only alphanumeric, hyphens, underscores allowed');
+}
+```
 
 #### 6.2 Clear SSH Keys in Snapshot
 When creating a snapshot, the template should not contain the original VM's SSH keys:
