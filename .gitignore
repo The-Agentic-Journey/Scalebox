@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+firecracker-api
+dist/
+
+# Environment
+.env
+.env.local
+
+# Test artifacts
+*.log
+test-results/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Bun
+bun.lockb
