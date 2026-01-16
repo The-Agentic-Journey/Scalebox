@@ -301,5 +301,54 @@ describe("Firecracker API", () => {
 	);
 
 	// === Phase 7: Cleanup ===
-	test.skip("can delete snapshot template", async () => {});
+	test(
+		"can delete snapshot template",
+		async () => {
+			// Create a VM from debian-base template
+			const { data: vm } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm.id);
+
+			// Wait for VM to be ready via SSH
+			await waitForSsh(vm.ip, 30000);
+
+			// Take a snapshot with a unique name
+			const templateName = `snapshot-delete-${Date.now()}`;
+			createdTemplates.push(templateName);
+
+			const { status: snapshotStatus } = await api.post(`/vms/${vm.id}/snapshot`, {
+				template_name: templateName,
+			});
+			expect(snapshotStatus).toBe(201);
+
+			// Verify the snapshot/template was created by checking the templates list
+			const { data: templatesBeforeDelete } = await api.get("/templates");
+			const namesBeforeDelete = templatesBeforeDelete.templates.map(
+				(t: { name: string }) => t.name,
+			);
+			expect(namesBeforeDelete).toContain(templateName);
+
+			// Delete the snapshot template
+			const { status: deleteStatus } = await api.delete(`/templates/${templateName}`);
+			expect(deleteStatus).toBe(204);
+
+			// Remove from createdTemplates since we've already deleted it
+			const templateIndex = createdTemplates.indexOf(templateName);
+			if (templateIndex > -1) {
+				createdTemplates.splice(templateIndex, 1);
+			}
+
+			// Verify the template returns 404 when deleted
+			const { status: getDeletedStatus } = await api.get(`/templates/${templateName}`);
+			expect(getDeletedStatus).toBe(404);
+
+			// Also verify it's no longer in the templates list
+			const { data: templatesAfterDelete } = await api.get("/templates");
+			const namesAfterDelete = templatesAfterDelete.templates.map((t: { name: string }) => t.name);
+			expect(namesAfterDelete).not.toContain(templateName);
+		},
+		{ timeout: 180000 },
+	);
 });
