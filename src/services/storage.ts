@@ -61,3 +61,47 @@ export async function deleteRootfs(rootfsPath: string): Promise<void> {
 		// Ignore errors
 	}
 }
+
+export async function copyRootfsToTemplate(
+	rootfsPath: string,
+	templateName: string,
+): Promise<string> {
+	const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
+
+	// Create templates directory if it doesn't exist
+	await mkdir(`${config.dataDir}/templates`, { recursive: true });
+
+	// Use reflink copy for COW efficiency
+	await $`cp --reflink=auto ${rootfsPath} ${templatePath}`.quiet();
+
+	return templatePath;
+}
+
+export async function clearAuthorizedKeys(rootfsPath: string): Promise<void> {
+	// Mount the rootfs temporarily
+	const mountPoint = `/tmp/mount-${Date.now()}`;
+	await mkdir(mountPoint, { recursive: true });
+
+	try {
+		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
+
+		// Clear authorized_keys file if it exists
+		const authorizedKeysPath = `${mountPoint}/root/.ssh/authorized_keys`;
+		try {
+			await $`sudo truncate -s 0 ${authorizedKeysPath}`.quiet();
+		} catch {
+			// File might not exist, which is fine
+		}
+	} finally {
+		try {
+			await $`sudo umount ${mountPoint}`;
+		} catch {
+			// Ignore unmount errors
+		}
+		try {
+			await $`rmdir ${mountPoint}`.quiet();
+		} catch {
+			// Ignore rmdir errors
+		}
+	}
+}

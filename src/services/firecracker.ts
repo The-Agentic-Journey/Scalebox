@@ -180,3 +180,19 @@ export async function stopFirecracker(pid: number): Promise<void> {
 export function buildKernelArgs(ip: string): string {
 	return `console=ttyS0 reboot=k panic=1 pci=off ip=${ip}::172.16.0.1:255.255.0.0::eth0:off`;
 }
+
+export async function pauseVm(socketPath: string): Promise<void> {
+	const result =
+		await $`curl -s --unix-socket ${socketPath} -X PATCH http://localhost/vm -H 'Content-Type: application/json' -d '{"state": "Paused"}'`.text();
+	if (result?.includes("fault_message")) {
+		throw new Error(`Failed to pause VM: ${result}`);
+	}
+}
+
+export async function resumeVm(socketPath: string): Promise<void> {
+	const result =
+		await $`curl -s --unix-socket ${socketPath} -X PATCH http://localhost/vm -H 'Content-Type: application/json' -d '{"state": "Resumed"}'`.text();
+	if (result?.includes("fault_message")) {
+		throw new Error(`Failed to resume VM: ${result}`);
+	}
+}

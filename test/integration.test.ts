@@ -155,10 +155,150 @@ describe("Firecracker API", () => {
 	);
 
 	// === Phase 6: Snapshots ===
-	test.skip("snapshot VM creates template", async () => {});
-	test.skip("snapshot appears in template list", async () => {});
-	test.skip("can create VM from snapshot", async () => {});
-	test.skip("snapshot preserves filesystem state", async () => {});
+	test(
+		"snapshot VM creates template",
+		async () => {
+			// Create a VM
+			const { data: vm } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm.id);
+
+			// Wait for VM to be ready
+			await waitForSsh(vm.ip, 30000);
+
+			// Create a snapshot
+			const templateName = `snapshot-test-${Date.now()}`;
+			createdTemplates.push(templateName);
+
+			const { status, data } = await api.post(`/vms/${vm.id}/snapshot`, {
+				template_name: templateName,
+			});
+
+			expect(status).toBe(201);
+			expect(data.template).toBe(templateName);
+			expect(data.source_vm).toBe(vm.id);
+			expect(data.size_bytes).toBeGreaterThan(0);
+			expect(data.created_at).toBeTruthy();
+		},
+		{ timeout: 120000 },
+	);
+
+	test(
+		"snapshot appears in template list",
+		async () => {
+			// Create a VM
+			const { data: vm } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm.id);
+
+			// Wait for VM to be ready
+			await waitForSsh(vm.ip, 30000);
+
+			// Create a snapshot
+			const templateName = `snapshot-list-${Date.now()}`;
+			createdTemplates.push(templateName);
+
+			await api.post(`/vms/${vm.id}/snapshot`, {
+				template_name: templateName,
+			});
+
+			// Check that snapshot appears in template list
+			const { data } = await api.get("/templates");
+			const names = data.templates.map((t: { name: string }) => t.name);
+			expect(names).toContain(templateName);
+		},
+		{ timeout: 120000 },
+	);
+
+	test(
+		"can create VM from snapshot",
+		async () => {
+			// Create a VM
+			const { data: vm1 } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm1.id);
+
+			// Wait for VM to be ready
+			await waitForSsh(vm1.ip, 30000);
+
+			// Create a snapshot
+			const templateName = `snapshot-create-${Date.now()}`;
+			createdTemplates.push(templateName);
+
+			await api.post(`/vms/${vm1.id}/snapshot`, {
+				template_name: templateName,
+			});
+
+			// Create a new VM from the snapshot
+			const { status, data: vm2 } = await api.post("/vms", {
+				template: templateName,
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm2.id);
+
+			expect(status).toBe(201);
+			expect(vm2.template).toBe(templateName);
+
+			// Verify new VM is reachable
+			await waitForSsh(vm2.ip, 30000);
+			const output = await sshExec(vm2.ip, "echo hello");
+			expect(output.trim()).toBe("hello");
+		},
+		{ timeout: 180000 },
+	);
+
+	test(
+		"snapshot preserves filesystem state",
+		async () => {
+			// Create a VM and write a file
+			const { data: vm1 } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm1.id);
+
+			// Wait for VM to be ready
+			await waitForSsh(vm1.ip, 30000);
+
+			// Write a unique file to the VM
+			const testContent = `test-content-${Date.now()}`;
+			await sshExec(vm1.ip, `echo "${testContent}" > /root/testfile.txt`);
+
+			// Verify the file was written
+			const verifyContent = await sshExec(vm1.ip, "cat /root/testfile.txt");
+			expect(verifyContent.trim()).toBe(testContent);
+
+			// Sync filesystem to ensure data is written to disk before snapshot
+			await sshExec(vm1.ip, "sync");
+
+			// Create a snapshot
+			const templateName = `snapshot-state-${Date.now()}`;
+			createdTemplates.push(templateName);
+
+			await api.post(`/vms/${vm1.id}/snapshot`, {
+				template_name: templateName,
+			});
+
+			// Create a new VM from the snapshot
+			const { data: vm2 } = await api.post("/vms", {
+				template: templateName,
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(vm2.id);
+
+			// Verify new VM has the file with the content
+			await waitForSsh(vm2.ip, 30000);
+			const content = await sshExec(vm2.ip, "cat /root/testfile.txt");
+			expect(content.trim()).toBe(testContent);
+		},
+		{ timeout: 180000 },
+	);
 
 	// === Phase 7: Cleanup ===
 	test.skip("can delete snapshot template", async () => {});

@@ -1,7 +1,15 @@
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { config } from "../config";
-import type { CreateVMRequest, VM, VMResponse } from "../types";
-import { buildKernelArgs, startFirecracker, stopFirecracker } from "./firecracker";
+import type { CreateVMRequest, SnapshotResponse, VM, VMResponse } from "../types";
+import {
+	buildKernelArgs,
+	pauseVm,
+	resumeVm,
+	startFirecracker,
+	stopFirecracker,
+} from "./firecracker";
 import {
 	allocateIp,
 	allocatePort,
@@ -12,7 +20,13 @@ import {
 	vmIdToMac,
 } from "./network";
 import { startProxy, stopProxy } from "./proxy";
-import { copyRootfs, deleteRootfs, injectSshKey } from "./storage";
+import {
+	clearAuthorizedKeys,
+	copyRootfs,
+	copyRootfsToTemplate,
+	deleteRootfs,
+	injectSshKey,
+} from "./storage";
 
 // In-memory VM state
 export const vms = new Map<string, VM>();
@@ -153,4 +167,60 @@ export function vmToResponse(vm: VM): VMResponse {
 		status: "running",
 		created_at: vm.createdAt.toISOString(),
 	};
+}
+
+export async function snapshotVm(vm: VM, templateName: string): Promise<SnapshotResponse> {
+	// Validate template name (alphanumeric, dash, underscore only)
+	if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
+		throw {
+			status: 400,
+			message: "Invalid template name. Use alphanumeric, dash, or underscore only.",
+		};
+	}
+
+	// Check if template already exists
+	const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
+	if (existsSync(templatePath)) {
+		throw { status: 409, message: "Template already exists" };
+	}
+
+	console.log(`[${vm.id}] Creating snapshot as template "${templateName}"...`);
+
+	try {
+		// Pause the VM
+		console.log(`[${vm.id}] Pausing VM...`);
+		await pauseVm(vm.socketPath);
+
+		// Copy the rootfs to templates directory using reflink
+		console.log(`[${vm.id}] Copying rootfs to template...`);
+		await copyRootfsToTemplate(vm.rootfsPath, templateName);
+
+		// Resume the VM
+		console.log(`[${vm.id}] Resuming VM...`);
+		await resumeVm(vm.socketPath);
+
+		// Clear authorized_keys from the new template (so it's clean)
+		console.log(`[${vm.id}] Clearing SSH authorized_keys from template...`);
+		await clearAuthorizedKeys(templatePath);
+
+		// Get template stats
+		const stats = await stat(templatePath);
+
+		console.log(`[${vm.id}] Snapshot created successfully as "${templateName}"`);
+
+		return {
+			template: templateName,
+			source_vm: vm.id,
+			size_bytes: stats.size,
+			created_at: new Date().toISOString(),
+		};
+	} catch (e) {
+		// Try to resume VM if paused but snapshot failed
+		try {
+			await resumeVm(vm.socketPath);
+		} catch {
+			// Ignore resume errors
+		}
+		throw e;
+	}
 }

@@ -29,3 +29,14 @@ export interface CreateVMRequest {
 	vcpu_count?: number;
 	mem_size_mib?: number;
 }
+
+export interface SnapshotRequest {
+	template_name: string;
+}
+
+export interface SnapshotResponse {
+	template: string;
+	source_vm: string;
+	size_bytes: number;
+	created_at: string;
+}

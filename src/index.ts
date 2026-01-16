@@ -2,7 +2,14 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { deleteTemplate, listTemplates } from "./services/template";
-import { createVm, deleteVm, vmToResponse, vms, withVmCreationLock } from "./services/vm";
+import {
+	createVm,
+	deleteVm,
+	snapshotVm,
+	vmToResponse,
+	vms,
+	withVmCreationLock,
+} from "./services/vm";
 
 const app = new Hono();
 
@@ -60,6 +67,27 @@ app.delete("/vms/:id", async (c) => {
 	if (!vm) return c.json({ error: "VM not found" }, 404);
 	await deleteVm(vm);
 	return c.body(null, 204);
+});
+
+app.post("/vms/:id/snapshot", async (c) => {
+	const vm = vms.get(c.req.param("id"));
+	if (!vm) return c.json({ error: "VM not found" }, 404);
+
+	try {
+		const body = await c.req.json();
+		const templateName = body.template_name;
+
+		if (!templateName) {
+			return c.json({ error: "template_name is required" }, 400);
+		}
+
+		const result = await snapshotVm(vm, templateName);
+		return c.json(result, 201);
+	} catch (e: unknown) {
+		console.error("Snapshot creation failed:", e);
+		const err = e as { status?: number; message?: string };
+		return c.json({ error: err.message || "Unknown error" }, err.status || 500);
+	}
 });
 
 export default { port: config.apiPort, hostname: "0.0.0.0", fetch: app.fetch };
