@@ -26,12 +26,23 @@ export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Pr
 	await mkdir(mountPoint, { recursive: true });
 
 	try {
-		await $`mount -o loop ${rootfsPath} ${mountPoint}`.quiet();
-		const authorizedKeysPath = `${mountPoint}/root/.ssh/authorized_keys`;
-		await writeFile(authorizedKeysPath, `${sshPublicKey}\n`, { mode: 0o600 });
+		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
+
+		// Ensure /root/.ssh directory exists and write the key
+		const sshDir = `${mountPoint}/root/.ssh`;
+		await $`sudo mkdir -p ${sshDir}`;
+		await $`sudo chmod 700 ${sshDir}`;
+
+		const authorizedKeysPath = `${sshDir}/authorized_keys`;
+		// Write to temp file first, then move with sudo
+		const tempKeyFile = `/tmp/authorized_keys_${Date.now()}`;
+		await writeFile(tempKeyFile, `${sshPublicKey}\n`, { mode: 0o600 });
+		await $`sudo cp ${tempKeyFile} ${authorizedKeysPath}`;
+		await $`sudo chmod 600 ${authorizedKeysPath}`;
+		await $`rm -f ${tempKeyFile}`;
 	} finally {
 		try {
-			await $`umount ${mountPoint}`.quiet();
+			await $`sudo umount ${mountPoint}`;
 		} catch {
 			// Ignore unmount errors
 		}

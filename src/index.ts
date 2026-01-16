@@ -23,6 +23,7 @@ app.delete("/templates/:name", async (c) => {
 		await deleteTemplate(c.req.param("name"));
 		return c.body(null, 204);
 	} catch (e: unknown) {
+		console.error("Template deletion failed:", e);
 		const err = e as { status?: number; message?: string };
 		return c.json({ error: err.message || "Unknown error" }, err.status || 500);
 	}
@@ -47,6 +48,8 @@ app.post("/vms", async (c) => {
 			return c.json(vmToResponse(vm), 201);
 		});
 	} catch (e: unknown) {
+		// Log full error details for debugging
+		console.error("VM creation failed:", e);
 		const err = e as { status?: number; message?: string };
 		return c.json({ error: err.message || "Unknown error" }, err.status || 500);
 	}
@@ -59,4 +62,4 @@ app.delete("/vms/:id", async (c) => {
 	return c.body(null, 204);
 });
 
-export default { port: config.apiPort, fetch: app.fetch };
+export default { port: config.apiPort, hostname: "0.0.0.0", fetch: app.fetch };

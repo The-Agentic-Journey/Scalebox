@@ -36,14 +36,14 @@ export function releasePort(port: number): void {
 }
 
 export async function createTapDevice(tapName: string): Promise<void> {
-	await $`ip tuntap add ${tapName} mode tap`.quiet();
-	await $`ip link set ${tapName} master br0`.quiet();
-	await $`ip link set ${tapName} up`.quiet();
+	await $`sudo ip tuntap add ${tapName} mode tap`;
+	await $`sudo ip link set ${tapName} master br0`;
+	await $`sudo ip link set ${tapName} up`;
 }
 
 export async function deleteTapDevice(tapName: string): Promise<void> {
 	try {
-		await $`ip link del ${tapName}`.quiet();
+		await $`sudo ip link del ${tapName}`.quiet();
 	} catch {
 		// Ignore errors if device doesn't exist
 	}

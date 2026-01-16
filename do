@@ -42,8 +42,14 @@ case "${1:-}" in
     "$0" stop
     "$0" start
     sleep 2  # Give server time to start
+    echo "==> Setting up SSH tunnel for tests..."
+    # Create SSH tunnel: local 8080 -> remote localhost:8080
+    ssh -f -N -L 8080:localhost:8080 "${VM_USER}@${VM_HOST}" -o ExitOnForwardFailure=yes || true
+    sleep 1
     echo "==> Running integration tests..."
-    bun_run test
+    VM_HOST=localhost bun_run test
+    # Kill the tunnel
+    pkill -f "ssh -f -N -L 8080:localhost:8080" 2>/dev/null || true
     ;;
   lint)
     bun_run run lint
@@ -69,7 +75,8 @@ case "${1:-}" in
     ;;
   start)
     # Start the API server on remote VM (in background)
-    ssh "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && nohup ./firecracker-api > server.log 2>&1 &"
+    # Use -f to background SSH and </dev/null to detach stdin
+    ssh -f "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && nohup ./firecracker-api > server.log 2>&1 </dev/null &"
     echo "Server started on ${VM_HOST}:8080"
     ;;
   stop)

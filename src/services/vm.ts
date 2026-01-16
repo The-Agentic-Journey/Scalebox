@@ -48,22 +48,27 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 	const vmId = generateVmId();
 	const ip = allocateIp();
 	const port = allocatePort(config.portMin, config.portMax);
-	const tapDevice = `tap-${vmId.substring(0, 12)}`;
+	// Linux interface names max 15 chars: "tap-" (4) + 10 hex chars = 14 chars
+	const tapDevice = `tap-${vmId.slice(3, 13)}`;
 	const socketPath = `/tmp/firecracker-${vmId}.sock`;
 
 	let rootfsPath: string;
 
 	try {
 		// Copy rootfs from template
+		console.log(`[${vmId}] Copying rootfs from template ${req.template}...`);
 		rootfsPath = await copyRootfs(req.template, vmId);
 
 		// Inject SSH key
+		console.log(`[${vmId}] Injecting SSH key...`);
 		await injectSshKey(rootfsPath, req.ssh_public_key);
 
 		// Create TAP device
+		console.log(`[${vmId}] Creating TAP device ${tapDevice}...`);
 		await createTapDevice(tapDevice);
 
 		// Start Firecracker
+		console.log(`[${vmId}] Starting Firecracker...`);
 		const pid = await startFirecracker({
 			socketPath,
 			kernelPath: config.kernelPath,
@@ -76,6 +81,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		});
 
 		// Start TCP proxy for SSH
+		console.log(`[${vmId}] Starting proxy on port ${port}...`);
 		await startProxy(vmId, port, ip, 22);
 
 		// Create VM record
@@ -93,8 +99,12 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		};
 
 		vms.set(vmId, vm);
+		console.log(`[${vmId}] VM created successfully`);
 		return vm;
 	} catch (e) {
+		// Log the error for debugging
+		console.error(`[${vmId}] VM creation failed:`, e);
+
 		// Cleanup on failure
 		releaseIp(ip);
 		releasePort(port);

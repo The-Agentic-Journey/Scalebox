@@ -55,39 +55,55 @@ async function configureVm(cfg: FirecrackerConfig): Promise<void> {
 	const socket = cfg.socketPath;
 
 	// Set boot source
-	await $`curl --unix-socket ${socket} -X PUT http://localhost/boot-source -H 'Content-Type: application/json' -d ${JSON.stringify(
-		{
-			kernel_image_path: cfg.kernelPath,
-			boot_args: cfg.bootArgs,
-		},
-	)}`.quiet();
+	const bootResult =
+		await $`curl -s --unix-socket ${socket} -X PUT http://localhost/boot-source -H 'Content-Type: application/json' -d ${JSON.stringify(
+			{
+				kernel_image_path: cfg.kernelPath,
+				boot_args: cfg.bootArgs,
+			},
+		)}`.text();
+	if (bootResult) {
+		console.log("Boot source response:", bootResult);
+	}
 
 	// Set rootfs
-	await $`curl --unix-socket ${socket} -X PUT http://localhost/drives/rootfs -H 'Content-Type: application/json' -d ${JSON.stringify(
-		{
-			drive_id: "rootfs",
-			path_on_host: cfg.rootfsPath,
-			is_root_device: true,
-			is_read_only: false,
-		},
-	)}`.quiet();
+	const rootfsResult =
+		await $`curl -s --unix-socket ${socket} -X PUT http://localhost/drives/rootfs -H 'Content-Type: application/json' -d ${JSON.stringify(
+			{
+				drive_id: "rootfs",
+				path_on_host: cfg.rootfsPath,
+				is_root_device: true,
+				is_read_only: false,
+			},
+		)}`.text();
+	if (rootfsResult) {
+		console.log("Rootfs response:", rootfsResult);
+	}
 
 	// Set network
-	await $`curl --unix-socket ${socket} -X PUT http://localhost/network-interfaces/eth0 -H 'Content-Type: application/json' -d ${JSON.stringify(
-		{
-			iface_id: "eth0",
-			guest_mac: cfg.macAddress,
-			host_dev_name: cfg.tapDevice,
-		},
-	)}`.quiet();
+	const networkResult =
+		await $`curl -s --unix-socket ${socket} -X PUT http://localhost/network-interfaces/eth0 -H 'Content-Type: application/json' -d ${JSON.stringify(
+			{
+				iface_id: "eth0",
+				guest_mac: cfg.macAddress,
+				host_dev_name: cfg.tapDevice,
+			},
+		)}`.text();
+	if (networkResult) {
+		console.log("Network response:", networkResult);
+	}
 
 	// Set machine config
-	await $`curl --unix-socket ${socket} -X PUT http://localhost/machine-config -H 'Content-Type: application/json' -d ${JSON.stringify(
-		{
-			vcpu_count: cfg.vcpuCount,
-			mem_size_mib: cfg.memSizeMib,
-		},
-	)}`.quiet();
+	const machineResult =
+		await $`curl -s --unix-socket ${socket} -X PUT http://localhost/machine-config -H 'Content-Type: application/json' -d ${JSON.stringify(
+			{
+				vcpu_count: cfg.vcpuCount,
+				mem_size_mib: cfg.memSizeMib,
+			},
+		)}`.text();
+	if (machineResult) {
+		console.log("Machine config response:", machineResult);
+	}
 }
 
 async function startVm(socketPath: string): Promise<void> {
