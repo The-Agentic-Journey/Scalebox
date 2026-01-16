@@ -9,6 +9,12 @@ echo "==> Installing system dependencies..."
 apt-get update
 apt-get install -y curl wget jq iptables iproute2 btrfs-progs
 
+# Add current user to kvm group (or create a service user)
+if [ -n "${SUDO_USER:-}" ]; then
+  usermod -a -G kvm "$SUDO_USER"
+  echo "Added $SUDO_USER to kvm group"
+fi
+
 echo "==> Setting up Firecracker..."
 "$SCRIPT_DIR/firecracker.sh"
 

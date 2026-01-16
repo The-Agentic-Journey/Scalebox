@@ -36,7 +36,7 @@ export function releasePort(port: number): void {
 }
 
 export async function createTapDevice(tapName: string): Promise<void> {
-	await $`sudo ip tuntap add ${tapName} mode tap`;
+	await $`sudo ip tuntap add ${tapName} mode tap user $(whoami)`;
 	await $`sudo ip link set ${tapName} master br0`;
 	await $`sudo ip link set ${tapName} up`;
 }
@@ -50,8 +50,9 @@ export async function deleteTapDevice(tapName: string): Promise<void> {
 }
 
 export function vmIdToMac(vmId: string): string {
-	// Generate MAC from VM ID: AA:FC:XX:XX:XX:XX
+	// Generate MAC from VM ID: AA:FC:XX:XX:XX:XX (6 octets total)
 	const hex = vmId.replace("vm-", "");
-	const parts = hex.match(/.{2}/g) || [];
+	// Use first 4 bytes (8 hex chars) + AA:FC prefix = 6 octets
+	const parts = hex.slice(0, 8).match(/.{2}/g) || [];
 	return `AA:FC:${parts.join(":")}`.toUpperCase();
 }

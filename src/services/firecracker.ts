@@ -20,11 +20,43 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 		// Ignore
 	}
 
-	// Start Firecracker process
+	// Extract vmId from socket path (e.g., /tmp/firecracker-abc123.sock -> abc123)
+	const vmId = cfg.socketPath.replace("/tmp/firecracker-", "").replace(".sock", "");
+	const logPath = `/tmp/fc-${vmId}-console.log`;
+
+	// Start Firecracker process with console output captured to log file
 	const proc = Bun.spawn(["firecracker", "--api-sock", cfg.socketPath], {
-		stdout: "ignore",
-		stderr: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
 	});
+
+	// Pipe stdout and stderr to log file for debugging VM console output
+	const logFile = Bun.file(logPath);
+	const logWriter = logFile.writer();
+
+	// Async function to stream output to log file
+	const pipeToLog = async (stream: ReadableStream<Uint8Array> | null) => {
+		if (!stream) return;
+		const reader = stream.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) {
+					logWriter.write(value);
+					logWriter.flush();
+				}
+			}
+		} catch {
+			// Stream closed or process exited
+		}
+	};
+
+	// Start piping in background (don't await)
+	pipeToLog(proc.stdout);
+	pipeToLog(proc.stderr);
+
+	console.log(`VM console output being captured to: ${logPath}`);
 
 	// Wait for socket to be available
 	await waitForSocket(cfg.socketPath);
@@ -33,7 +65,24 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 	await configureVm(cfg);
 
 	// Start the VM
-	await startVm(cfg.socketPath);
+	const startResult = await startVm(cfg.socketPath);
+	if (startResult) {
+		// Check if it's an error response
+		if (startResult.includes("fault_message")) {
+			console.error("VM start failed:", startResult);
+			throw new Error(`VM start failed: ${startResult}`);
+		}
+	}
+
+	// Give the VM a moment to start and check if it's still running
+	await Bun.sleep(500);
+
+	// Check if process is still alive
+	try {
+		process.kill(proc.pid, 0); // Signal 0 tests if process exists
+	} catch {
+		throw new Error("Firecracker process died after start");
+	}
 
 	return proc.pid;
 }
@@ -106,8 +155,10 @@ async function configureVm(cfg: FirecrackerConfig): Promise<void> {
 	}
 }
 
-async function startVm(socketPath: string): Promise<void> {
-	await $`curl --unix-socket ${socketPath} -X PUT http://localhost/actions -H 'Content-Type: application/json' -d '{"action_type": "InstanceStart"}'`.quiet();
+async function startVm(socketPath: string): Promise<string> {
+	const result =
+		await $`curl -s --unix-socket ${socketPath} -X PUT http://localhost/actions -H 'Content-Type: application/json' -d '{"action_type": "InstanceStart"}'`.text();
+	return result;
 }
 
 export async function stopFirecracker(pid: number): Promise<void> {

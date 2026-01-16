@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { API_BASE_URL, TEST_PUBLIC_KEY, api } from "./helpers";
+import { API_BASE_URL, TEST_PUBLIC_KEY, api, sshExec, waitForSsh } from "./helpers";
 
 describe("Firecracker API", () => {
 	// === Test Helpers & Cleanup ===
@@ -124,8 +124,35 @@ describe("Firecracker API", () => {
 	});
 
 	// === Phase 5: SSH Access ===
-	test.skip("VM becomes reachable via SSH", async () => {});
-	test.skip("can execute command via SSH", async () => {});
+	test(
+		"VM becomes reachable via SSH",
+		async () => {
+			const { data } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(data.id);
+
+			await waitForSsh(data.ip, 30000);
+		},
+		{ timeout: 60000 },
+	);
+
+	test(
+		"can execute command via SSH",
+		async () => {
+			const { data } = await api.post("/vms", {
+				template: "debian-base",
+				ssh_public_key: TEST_PUBLIC_KEY,
+			});
+			createdVmIds.push(data.id);
+
+			await waitForSsh(data.ip, 30000);
+			const output = await sshExec(data.ip, "echo hello");
+			expect(output.trim()).toBe("hello");
+		},
+		{ timeout: 60000 },
+	);
 
 	// === Phase 6: Snapshots ===
 	test.skip("snapshot VM creates template", async () => {});

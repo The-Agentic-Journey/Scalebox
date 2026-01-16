@@ -19,7 +19,7 @@ rm -rf /tmp/rootfs
 
 # Create rootfs (use explicit Debian version for reproducibility)
 mkdir -p /tmp/rootfs
-debootstrap --include=openssh-server,iproute2,iputils-ping bookworm /tmp/rootfs http://deb.debian.org/debian
+debootstrap --include=openssh-server,iproute2,iputils-ping,haveged bookworm /tmp/rootfs http://deb.debian.org/debian
 
 # Configure for Firecracker
 chroot /tmp/rootfs /bin/bash <<'CHROOT_EOF'
@@ -34,6 +34,15 @@ chmod 600 /root/.ssh/authorized_keys
 
 # Allow root login with key
 sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+
+# Generate SSH host keys (required for sshd to start)
+ssh-keygen -A
+
+# Enable sshd service
+systemctl enable ssh.service
+
+# Enable haveged for entropy (required for SSH to start quickly)
+systemctl enable haveged.service
 
 # Set hostname
 echo "firecracker-vm" > /etc/hostname
