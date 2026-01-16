@@ -61,7 +61,7 @@ firecracker-api/
     proxy.ts           # TCP proxy for SSH
     firecracker.ts     # Firecracker process management
     storage.ts         # btrfs operations, rootfs mounting
-    config.ts          # Configuration constants
+    config.ts          # Configuration (including protected templates)
   provision/
     setup.sh           # Main provisioning script
     firecracker.sh     # Firecracker installation
@@ -131,6 +131,27 @@ describe('Firecracker API', () => {
 - TypeScript strict mode
 - No unused variables
 - Consistent formatting
+
+#### 0.5 Configuration Module
+```typescript
+// src/config.ts
+export const config = {
+  // Server
+  apiPort: parseInt(process.env.API_PORT || '8080'),
+  apiToken: process.env.API_TOKEN || 'dev-token',
+
+  // Storage
+  dataDir: process.env.DATA_DIR || '/var/lib/firecracker',
+  kernelPath: process.env.KERNEL_PATH || '/var/lib/firecracker/kernel/vmlinux',
+
+  // Networking
+  portMin: parseInt(process.env.PORT_MIN || '22001'),
+  portMax: parseInt(process.env.PORT_MAX || '32000'),
+
+  // Protected templates - cannot be deleted via API
+  protectedTemplates: ['debian-base'],
+};
+```
 
 ### Verification
 - `./do check` runs (test fails, but linter passes)
@@ -561,13 +582,43 @@ Response:
 DELETE /templates/:name
 
 Response: 204 No Content
+
+Errors:
+- 404 Not Found: Template doesn't exist
+- 403 Forbidden: Cannot delete protected template
+- 409 Conflict: Template in use by running VM(s)
 ```
 
-- Prevent deletion of "debian-base" (protected)
-- Remove the .ext4 file
+**Implementation:**
+```typescript
+async function deleteTemplate(name: string): Promise<void> {
+  const templatePath = `${config.dataDir}/templates/${name}.ext4`;
+
+  // Check template exists
+  if (!await Bun.file(templatePath).exists()) {
+    throw new NotFoundError(`Template '${name}' not found`);
+  }
+
+  // Check if protected (defined in config.ts)
+  if (config.protectedTemplates.includes(name)) {
+    throw new ForbiddenError(`Cannot delete protected template '${name}'`);
+  }
+
+  // Check no running VMs use this template
+  const vmsUsingTemplate = Array.from(vms.values()).filter(vm => vm.template === name);
+  if (vmsUsingTemplate.length > 0) {
+    throw new ConflictError(`Template '${name}' is in use by ${vmsUsingTemplate.length} VM(s)`);
+  }
+
+  // Delete the file
+  await unlink(templatePath);
+}
+```
 
 ### Verification
 - GET /templates returns debian-base
+- DELETE /templates/debian-base returns 403
+- DELETE /templates/nonexistent returns 404
 - Integration test template listing passes
 
 ### Done Criteria
@@ -749,15 +800,33 @@ Implement TCP proxy so external clients can SSH to VMs via allocated ports.
 import * as net from 'net';
 
 const proxies = new Map<string, net.Server>();
+const connections = new Map<string, Set<net.Socket>>();
 
 export function startProxy(vmId: string, localPort: number, targetIp: string, targetPort: number) {
+  const sockets = new Set<net.Socket>();
+  connections.set(vmId, sockets);
+
   const server = net.createServer((clientSocket) => {
     const vmSocket = net.createConnection(targetPort, targetIp);
+
+    // Track both sockets for cleanup
+    sockets.add(clientSocket);
+    sockets.add(vmSocket);
+
     clientSocket.pipe(vmSocket);
     vmSocket.pipe(clientSocket);
 
-    clientSocket.on('error', () => vmSocket.destroy());
-    vmSocket.on('error', () => clientSocket.destroy());
+    const cleanup = () => {
+      sockets.delete(clientSocket);
+      sockets.delete(vmSocket);
+      clientSocket.destroy();
+      vmSocket.destroy();
+    };
+
+    clientSocket.on('error', cleanup);
+    clientSocket.on('close', cleanup);
+    vmSocket.on('error', cleanup);
+    vmSocket.on('close', cleanup);
   });
 
   server.listen(localPort, '0.0.0.0');
@@ -765,6 +834,16 @@ export function startProxy(vmId: string, localPort: number, targetIp: string, ta
 }
 
 export function stopProxy(vmId: string) {
+  // First: destroy all active connections (prevents zombie sessions)
+  const sockets = connections.get(vmId);
+  if (sockets) {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    connections.delete(vmId);
+  }
+
+  // Then: close the server (stops accepting new connections)
   const server = proxies.get(vmId);
   if (server) {
     server.close();
@@ -772,6 +851,8 @@ export function stopProxy(vmId: string) {
   }
 }
 ```
+
+**Why track connections:** `server.close()` only stops accepting new connections. Existing SSH sessions would become zombies, leaking file descriptors. By tracking sockets, we ensure clean termination when a VM is deleted.
 
 #### 5.2 Integrate with VM Lifecycle
 - Start proxy when VM is created
@@ -824,26 +905,6 @@ Response: 201 Created
 7. Clear SSH authorized_keys in the template copy (so next VM gets fresh injection)
 8. Return template metadata
 
-**Pause/Resume for Consistency:**
-```typescript
-// Pause VM before copying rootfs (prevents write corruption)
-await fetch(`http://localhost/vm`, {
-  method: 'PATCH',
-  socketPath: vm.socketPath,
-  body: JSON.stringify({ state: 'Paused' })
-});
-
-// Copy with reflink (instant, COW)
-await $`cp --reflink=auto ${vm.rootfsPath} ${templatePath}`;
-
-// Resume VM (total pause ~100ms)
-await fetch(`http://localhost/vm`, {
-  method: 'PATCH',
-  socketPath: vm.socketPath,
-  body: JSON.stringify({ state: 'Resumed' })
-});
-```
-
 **Template Name Validation (prevent path traversal):**
 ```typescript
 if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
@@ -851,14 +912,78 @@ if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
 }
 ```
 
-#### 6.2 Clear SSH Keys in Snapshot
-When creating a snapshot, the template should not contain the original VM's SSH keys:
-```bash
-# Mount template, clear authorized_keys, unmount
-mount template.ext4 /mnt/temp
-> /mnt/temp/root/.ssh/authorized_keys
-umount /mnt/temp
+#### 6.2 Full Snapshot Implementation
+```typescript
+async function snapshotVm(vm: VM, templateName: string): Promise<Template> {
+  const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
+  const mountPoint = `/mnt/template-${templateName}`;
+
+  // Validate template name
+  if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
+    throw new BadRequestError('Invalid template name');
+  }
+
+  // Check template doesn't already exist
+  if (await Bun.file(templatePath).exists()) {
+    throw new ConflictError(`Template '${templateName}' already exists`);
+  }
+
+  // Pause VM for consistent snapshot
+  await pauseVm(vm);
+
+  try {
+    // Copy rootfs with reflink (instant COW copy)
+    await $`cp --reflink=auto ${vm.rootfsPath} ${templatePath}`;
+  } finally {
+    // Always resume VM, even if copy fails
+    await resumeVm(vm);
+  }
+
+  // Clear SSH keys from template (not the running VM)
+  try {
+    await $`mkdir -p ${mountPoint}`;
+    await $`mount ${templatePath} ${mountPoint}`;
+    await $`truncate -s 0 ${mountPoint}/root/.ssh/authorized_keys`;
+  } finally {
+    // Always unmount and cleanup, even on error
+    await $`umount ${mountPoint} 2>/dev/null || true`;
+    await $`rmdir ${mountPoint} 2>/dev/null || true`;
+  }
+
+  const stats = await Bun.file(templatePath).stat();
+  return {
+    name: templateName,
+    size_bytes: stats.size,
+    created_at: new Date().toISOString(),
+  };
+}
+
+async function pauseVm(vm: VM): Promise<void> {
+  await fetch('http://localhost/vm', {
+    method: 'PATCH',
+    // @ts-ignore - Bun supports socketPath
+    unix: vm.socketPath,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state: 'Paused' }),
+  });
+}
+
+async function resumeVm(vm: VM): Promise<void> {
+  await fetch('http://localhost/vm', {
+    method: 'PATCH',
+    // @ts-ignore - Bun supports socketPath
+    unix: vm.socketPath,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state: 'Resumed' }),
+  });
+}
 ```
+
+**Key points:**
+- Uses `try/finally` to ensure VM is always resumed, even if copy fails
+- Uses unique mount point per template to avoid collisions
+- Clears SSH keys so new VMs get fresh key injection
+- Total VM pause time ~100ms (reflink copy is instant)
 
 ### Verification
 - Snapshot creates new template file
@@ -878,6 +1003,65 @@ umount /mnt/temp
 
 ### Goal
 Complete the integration test to verify the full workflow.
+
+### Test Helpers
+
+#### API Client with Authentication
+```typescript
+// test/helpers.ts
+const API_URL = `http://${process.env.VM_HOST}:8080`;
+const API_TOKEN = process.env.API_TOKEN || 'dev-token';
+
+export const api = {
+  async get(path: string) {
+    const res = await fetch(`${API_URL}${path}`, {
+      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+    });
+    if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
+    return res.json();
+  },
+
+  async post(path: string, body: unknown) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
+    return res.json();
+  },
+
+  async delete(path: string) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+    });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`DELETE ${path}: ${res.status}`);
+    }
+  }
+};
+```
+
+#### VM Readiness Helper
+```typescript
+// Wait for VM's SSH to become available
+async function waitForVm(ip: string, timeoutMs = 30000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await $`nc -z ${ip} 22`.quiet();
+      return;
+    } catch {
+      await Bun.sleep(500);
+    }
+  }
+  throw new Error(`VM ${ip} did not become ready within ${timeoutMs}ms`);
+}
+```
 
 ### Test Flow
 ```typescript
@@ -952,6 +1136,18 @@ test('full workflow', async () => {
 ```typescript
 import { $ } from 'bun';
 
+const TEST_KEY_PATH = process.env.TEST_SSH_KEY || './test/id_ed25519';
+
+/**
+ * Execute a command on a VM via SSH.
+ *
+ * LIMITATION: Use only for simple, single commands. The command is passed
+ * directly to the remote shell, so complex commands with quotes or special
+ * characters may not work as expected. For test purposes, keep commands simple:
+ *   - OK: 'cat /root/marker.txt'
+ *   - OK: 'echo test > /root/file.txt'
+ *   - AVOID: 'echo "hello world"' (nested quotes)
+ */
 async function sshExec(port: number, command: string): Promise<string> {
   const host = process.env.VM_HOST;
   const result = await $`ssh -p ${port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_KEY_PATH} root@${host} ${command}`.text();
@@ -1121,11 +1317,15 @@ firecracker-api/
 ## Environment Variables
 
 ```bash
-# Required
-VM_HOST=<ip-of-target-machine>     # For integration tests
+# Required for server
 API_TOKEN=<bearer-token>           # API authentication
 
-# Optional (defaults shown)
+# Required for integration tests
+VM_HOST=<ip-of-target-machine>     # Host running the API
+API_TOKEN=<bearer-token>           # Must match server token
+TEST_SSH_KEY=./test/id_ed25519     # Path to SSH private key for test VMs
+
+# Optional server config (defaults shown)
 API_PORT=8080
 DATA_DIR=/var/lib/firecracker
 KERNEL_PATH=/var/lib/firecracker/kernel/vmlinux
