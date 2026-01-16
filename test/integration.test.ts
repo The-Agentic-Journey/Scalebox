@@ -1,38 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-
-const API_URL = `http://${process.env.VM_HOST || "34.40.56.57"}:8080`;
-const API_TOKEN = process.env.API_TOKEN || "dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800";
-
-// Simple API client
-const api = {
-	async get(path: string) {
-		const res = await fetch(`${API_URL}${path}`, {
-			headers: { Authorization: `Bearer ${API_TOKEN}` },
-		});
-		return { status: res.status, data: res.ok ? await res.json() : null };
-	},
-	async post(path: string, body: unknown) {
-		const res = await fetch(`${API_URL}${path}`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
-			body: JSON.stringify(body),
-		});
-		return { status: res.status, data: res.ok ? await res.json() : null };
-	},
-	async delete(path: string) {
-		const res = await fetch(`${API_URL}${path}`, {
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${API_TOKEN}` },
-		});
-		return { status: res.status };
-	},
-	async getRaw(path: string, token?: string) {
-		const res = await fetch(`${API_URL}${path}`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {},
-		});
-		return { status: res.status };
-	},
-};
+import { api } from "./helpers";
 
 describe("Firecracker API", () => {
 	// === Test Helpers & Cleanup ===
