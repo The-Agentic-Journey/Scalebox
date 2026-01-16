@@ -1,0 +1,17 @@
+{
+	"name": "firecracker-api",
+	"version": "1.0.0",
+	"type": "module",
+	"scripts": {
+		"lint": "biome check --apply .",
+		"lint:check": "biome check ."
+	},
+	"dependencies": {
+		"hono": "^4.6.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"@types/bun": "^1.1.0",
+		"typescript": "^5.6.0"
+	}
+}
