@@ -12,6 +12,14 @@ A REST API service for managing Firecracker microVMs on a dedicated host. Suppor
 - SSH: `ssh dev@34.40.56.57`
 - Dev Token: `dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800`
 
+**Development Workflow:** Local development, remote execution
+- Code is written locally in `/firecracker-api`
+- Code is deployed (rsync) to the remote VM for execution
+- Provisioning scripts run on the remote VM (has KVM/Firecracker)
+- API server runs on the remote VM
+- Integration tests run locally, hitting the remote VM's API
+- This enables live testing against real Firecracker infrastructure
+
 **Tech Stack:**
 - Runtime: Bun (TypeScript, single-binary compilation)
 - Storage: btrfs with reflink copies for COW efficiency
@@ -134,11 +142,21 @@ firecracker-api/
 #!/usr/bin/env bash
 set -euo pipefail
 
+VM_HOST="${VM_HOST:-34.40.56.57}"
+VM_USER="${VM_USER:-dev}"
+REMOTE_DIR="/home/${VM_USER}/firecracker-api"
+
 case "${1:-}" in
   check)
     echo "==> Running linter..."
     bun run lint
-    echo "==> Running integration test..."
+    echo "==> Deploying to VM..."
+    "$0" deploy
+    echo "==> Restarting server on VM..."
+    "$0" stop
+    "$0" start
+    sleep 2  # Give server time to start
+    echo "==> Running integration tests..."
     bun test
     ;;
   lint)
@@ -150,8 +168,40 @@ case "${1:-}" in
   build)
     bun build --compile --outfile=firecracker-api ./src/index.ts
     ;;
+  deploy)
+    # Sync code to remote VM (excludes node_modules, .git, etc.)
+    rsync -avz --delete \
+      --exclude 'node_modules' \
+      --exclude '.git' \
+      --exclude '*.log' \
+      ./ "${VM_USER}@${VM_HOST}:${REMOTE_DIR}/"
+    # Install dependencies on remote
+    ssh "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && bun install"
+    ;;
+  provision)
+    # Run provisioning scripts on remote VM
+    ssh "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && sudo ./provision/setup.sh"
+    ;;
+  start)
+    # Start the API server on remote VM (in background)
+    ssh "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && nohup bun run src/index.ts > server.log 2>&1 &"
+    echo "Server started on ${VM_HOST}:8080"
+    ;;
+  stop)
+    # Stop the API server on remote VM
+    ssh "${VM_USER}@${VM_HOST}" "pkill -f 'bun run src/index.ts' || true"
+    echo "Server stopped"
+    ;;
+  logs)
+    # Tail server logs from remote VM
+    ssh "${VM_USER}@${VM_HOST}" "tail -f ${REMOTE_DIR}/server.log"
+    ;;
+  ssh)
+    # SSH into the remote VM
+    ssh "${VM_USER}@${VM_HOST}"
+    ;;
   *)
-    echo "Usage: ./do {check|lint|test|build}"
+    echo "Usage: ./do {check|lint|test|build|deploy|provision|start|stop|logs|ssh}"
     exit 1
     ;;
 esac
@@ -324,7 +374,21 @@ Create reusable provisioning scripts that set up any fresh Ubuntu/Debian VM for 
 ### Prerequisites
 - SSH access to target VM with sudo privileges (e.g., `dev@34.40.56.57`)
 - VM has nested virtualization enabled (GCP) or is bare metal
-- Run provisioning scripts with sudo: `sudo ./provision/setup.sh`
+- Bun installed on the remote VM
+
+### Running Provisioning
+From local machine:
+```bash
+./do deploy      # First, sync code to remote VM
+./do provision   # Then, run provisioning scripts via SSH
+```
+
+Or manually SSH and run:
+```bash
+ssh dev@34.40.56.57
+cd ~/firecracker-api
+sudo ./provision/setup.sh
+```
 
 ### Steps
 
@@ -706,7 +770,20 @@ rm /tmp/test-vm.ext4
 ### Goal
 Create HTTP server with health check and authentication.
 
-**Prerequisites:** Phase 1 complete (host provisioned), API server can be started on target.
+**Prerequisites:** Phase 1 complete (host provisioned)
+
+**Development Workflow for API Changes:**
+```bash
+# 1. Write code locally
+# 2. Deploy and start server
+./do deploy && ./do stop && ./do start
+
+# 3. Run tests
+./do test
+
+# Or run full check (lint + deploy + test)
+./do check
+```
 
 ---
 
@@ -1772,14 +1849,21 @@ PORT_MAX=32000
 ## Quick Reference: Commands
 
 ```bash
-# Development
-./do check          # Lint + integration test
-./do lint           # Lint only
-./do test           # Integration test only
+# Local development
+./do lint           # Run linter locally
 ./do build          # Compile single binary
 
-# Provisioning (on target VM)
-./provision/setup.sh    # Full setup
+# Remote VM operations
+./do deploy         # Sync code to remote VM + install deps
+./do provision      # Run provisioning scripts on remote VM
+./do start          # Start API server on remote VM (background)
+./do stop           # Stop API server on remote VM
+./do logs           # Tail server logs from remote VM
+./do ssh            # SSH into the remote VM
+
+# Testing (local tests hitting remote VM)
+./do test           # Run integration tests against remote VM
+./do check          # Lint + deploy + integration tests (full CI flow)
 
 # Manual testing
 curl -H "Authorization: Bearer dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800" http://34.40.56.57:8080/health
