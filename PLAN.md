@@ -145,8 +145,14 @@ export const config = {
   kernelPath: process.env.KERNEL_PATH || '/var/lib/firecracker/kernel/vmlinux',
 
   // Networking
+  // Note: Port range (22001-32000 = ~10k ports) is the effective VM limit,
+  // not the IP range (172.16.0.0/16 = ~65k IPs)
   portMin: parseInt(process.env.PORT_MIN || '22001'),
   portMax: parseInt(process.env.PORT_MAX || '32000'),
+
+  // VM defaults
+  defaultVcpuCount: parseInt(process.env.DEFAULT_VCPU_COUNT || '2'),
+  defaultMemSizeMib: parseInt(process.env.DEFAULT_MEM_SIZE_MIB || '512'),
 
   // Protected templates - cannot be deleted via API
   protectedTemplates: ['debian-base'],
@@ -267,6 +273,9 @@ mkfs.btrfs /var/lib/firecracker.img
 # Mount
 mkdir -p /var/lib/firecracker
 mount -o loop /var/lib/firecracker.img /var/lib/firecracker
+
+# Create subdirectories for templates, VMs, and kernel
+mkdir -p /var/lib/firecracker/{templates,vms,kernel}
 
 # Add to fstab for persistence
 echo '/var/lib/firecracker.img /var/lib/firecracker btrfs loop,defaults 0 0' >> /etc/fstab
@@ -592,6 +601,11 @@ Errors:
 **Implementation:**
 ```typescript
 async function deleteTemplate(name: string): Promise<void> {
+  // Validate template name (prevent path traversal)
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new BadRequestError('Invalid template name: only alphanumeric, hyphens, underscores allowed');
+  }
+
   const templatePath = `${config.dataDir}/templates/${name}.ext4`;
 
   // Check template exists
@@ -639,7 +653,7 @@ Implement VM creation, listing, and deletion.
 #### 4.1 VM Data Structures
 ```typescript
 interface VM {
-  id: string;           // "vm-" + random hex
+  id: string;           // "vm-" + random hex (12 chars)
   name?: string;
   template: string;
   ip: string;           // 172.16.x.x
@@ -650,6 +664,15 @@ interface VM {
   tapDevice: string;    // tap-{id}
   createdAt: Date;
 }
+
+// Generate unique VM ID: "vm-" + 12 hex chars
+import { randomBytes } from 'crypto';
+
+function generateVmId(): string {
+  return `vm-${randomBytes(6).toString('hex')}`;
+}
+// Example output: "vm-a1b2c3d4e5f6"
+```
 ```
 
 #### 4.2 IP Allocation
@@ -658,9 +681,13 @@ interface VM {
 - On startup: scan running VMs to rebuild allocation state
 
 #### 4.3 Port Allocation (Hash-based with Collision Detection)
+
+**Note:** The port range (22001-32000 = ~10,000 ports) is the effective VM limit, not the IP range (172.16.0.0/16 = ~65k IPs). Each VM needs a unique SSH proxy port.
+
 ```typescript
 const PORT_MIN = 22001;
 const PORT_MAX = 32000;
+// Effective limit: PORT_MAX - PORT_MIN + 1 = 10,000 concurrent VMs
 
 function vmIdToPort(vmId: string): number {
   const hash = createHash('sha256').update(vmId).digest();
@@ -687,13 +714,44 @@ function allocatePort(vmId: string, usedPorts: Set<number>): number {
 
 Note: `usedPorts` is derived from in-memory VM state, rebuilt on startup.
 
-#### 4.4 VM Creation
+#### 4.4 Mutex for VM Creation
+
+Concurrent VM creation can cause race conditions (duplicate IPs, port collisions). Use a simple async mutex:
+
+```typescript
+// Simple mutex using while-loop spin lock
+let vmCreationLock = false;
+
+async function withVmCreationLock<T>(fn: () => Promise<T>): Promise<T> {
+  // Wait for lock to be released
+  while (vmCreationLock) {
+    await Bun.sleep(10);
+  }
+  vmCreationLock = true;
+  try {
+    return await fn();
+  } finally {
+    vmCreationLock = false;
+  }
+}
+
+// Usage in createVm handler:
+app.post('/vms', async (c) => {
+  return withVmCreationLock(async () => {
+    // ... VM creation logic
+  });
+});
+```
+
+#### 4.5 VM Creation
 ```
 POST /vms
 {
   "template": "debian-base",
   "name": "my-vm",
-  "ssh_public_key": "ssh-ed25519 AAAA..."
+  "ssh_public_key": "ssh-ed25519 AAAA...",
+  "vcpu_count": 2,         // Optional, defaults to config.defaultVcpuCount
+  "mem_size_mib": 512      // Optional, defaults to config.defaultMemSizeMib
 }
 
 Response: 201 Created
@@ -717,6 +775,24 @@ function vmIdToMac(vmId: string): string {
   return `AA:FC:${hash.subarray(0, 4).toString('hex').match(/.{2}/g)!.join(':')}`;
 }
 // Example: vm-abc123 → AA:FC:3a:f2:91:c7
+```
+
+**Kernel Command Line:**
+```typescript
+// Build kernel boot arguments for VM networking
+function buildKernelArgs(ip: string, gateway: string = '172.16.0.1'): string {
+  // Format: ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>
+  // See: https://www.kernel.org/doc/html/latest/admin-guide/nfs/nfsroot.html
+  return [
+    'console=ttyS0',
+    'reboot=k',
+    'panic=1',
+    'pci=off',
+    `ip=${ip}::${gateway}:255.255.0.0::eth0:off`
+  ].join(' ');
+}
+// Example: buildKernelArgs('172.16.0.2')
+// → "console=ttyS0 reboot=k panic=1 pci=off ip=172.16.0.2::172.16.0.1:255.255.0.0::eth0:off"
 ```
 
 **Steps:**
@@ -802,35 +878,44 @@ import * as net from 'net';
 const proxies = new Map<string, net.Server>();
 const connections = new Map<string, Set<net.Socket>>();
 
-export function startProxy(vmId: string, localPort: number, targetIp: string, targetPort: number) {
-  const sockets = new Set<net.Socket>();
-  connections.set(vmId, sockets);
+export function startProxy(vmId: string, localPort: number, targetIp: string, targetPort: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set<net.Socket>();
+    connections.set(vmId, sockets);
 
-  const server = net.createServer((clientSocket) => {
-    const vmSocket = net.createConnection(targetPort, targetIp);
+    const server = net.createServer((clientSocket) => {
+      const vmSocket = net.createConnection(targetPort, targetIp);
 
-    // Track both sockets for cleanup
-    sockets.add(clientSocket);
-    sockets.add(vmSocket);
+      // Track both sockets for cleanup
+      sockets.add(clientSocket);
+      sockets.add(vmSocket);
 
-    clientSocket.pipe(vmSocket);
-    vmSocket.pipe(clientSocket);
+      clientSocket.pipe(vmSocket);
+      vmSocket.pipe(clientSocket);
 
-    const cleanup = () => {
-      sockets.delete(clientSocket);
-      sockets.delete(vmSocket);
-      clientSocket.destroy();
-      vmSocket.destroy();
-    };
+      const cleanup = () => {
+        sockets.delete(clientSocket);
+        sockets.delete(vmSocket);
+        clientSocket.destroy();
+        vmSocket.destroy();
+      };
 
-    clientSocket.on('error', cleanup);
-    clientSocket.on('close', cleanup);
-    vmSocket.on('error', cleanup);
-    vmSocket.on('close', cleanup);
+      clientSocket.on('error', cleanup);
+      clientSocket.on('close', cleanup);
+      vmSocket.on('error', cleanup);
+      vmSocket.on('close', cleanup);
+    });
+
+    server.on('error', (err) => {
+      connections.delete(vmId);
+      reject(err);
+    });
+
+    server.listen(localPort, '0.0.0.0', () => {
+      proxies.set(vmId, server);
+      resolve();
+    });
   });
-
-  server.listen(localPort, '0.0.0.0');
-  proxies.set(vmId, server);
 }
 
 export function stopProxy(vmId: string) {
@@ -940,12 +1025,19 @@ async function snapshotVm(vm: VM, templateName: string): Promise<Template> {
   }
 
   // Clear SSH keys from template (not the running VM)
+  // If this fails, delete the template to avoid leaking SSH keys
   try {
     await $`mkdir -p ${mountPoint}`;
     await $`mount ${templatePath} ${mountPoint}`;
     await $`truncate -s 0 ${mountPoint}/root/.ssh/authorized_keys`;
+  } catch (error) {
+    // Cleanup: delete partial template to prevent SSH key leakage
+    await $`umount ${mountPoint} 2>/dev/null || true`;
+    await $`rmdir ${mountPoint} 2>/dev/null || true`;
+    await $`rm -f ${templatePath}`;
+    throw error;
   } finally {
-    // Always unmount and cleanup, even on error
+    // Always unmount and cleanup mount point
     await $`umount ${mountPoint} 2>/dev/null || true`;
     await $`rmdir ${mountPoint} 2>/dev/null || true`;
   }
@@ -1004,7 +1096,35 @@ async function resumeVm(vm: VM): Promise<void> {
 ### Goal
 Complete the integration test to verify the full workflow.
 
+### Test Fixtures
+
+#### Test SSH Keys
+
+Create test SSH keys (checked into git - for testing only):
+
+```bash
+# Generate ed25519 key pair for testing
+ssh-keygen -t ed25519 -f test/fixtures/test_key -N "" -C "firecracker-api-test"
+```
+
+This creates:
+- `test/fixtures/test_key` - Private key
+- `test/fixtures/test_key.pub` - Public key
+
+**Note:** These keys are for testing only. They are committed to git to ensure reproducible tests.
+
 ### Test Helpers
+
+#### Test Key Loading
+```typescript
+// test/helpers.ts
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const FIXTURES_DIR = join(import.meta.dir, 'fixtures');
+export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, 'test_key');
+export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, 'test_key.pub'), 'utf-8').trim();
+```
 
 #### API Client with Authentication
 ```typescript
@@ -1063,6 +1183,46 @@ async function waitForVm(ip: string, timeoutMs = 30000): Promise<void> {
 }
 ```
 
+### Test Cleanup Pattern
+
+Track created resources and clean up after each test, even on failure:
+
+```typescript
+// test/integration.test.ts
+import { describe, test, afterEach, expect } from 'bun:test';
+import { api, TEST_PUBLIC_KEY } from './helpers';
+
+describe('Firecracker API', () => {
+  // Track resources created during tests
+  const createdVmIds: string[] = [];
+  const createdTemplates: string[] = [];
+
+  afterEach(async () => {
+    // Clean up VMs first (templates may depend on them being deleted)
+    for (const vmId of createdVmIds) {
+      try {
+        await api.delete(`/vms/${vmId}`);
+      } catch {
+        // Ignore errors - VM may already be deleted
+      }
+    }
+    createdVmIds.length = 0;
+
+    // Clean up templates
+    for (const template of createdTemplates) {
+      try {
+        await api.delete(`/templates/${template}`);
+      } catch {
+        // Ignore errors - template may already be deleted or protected
+      }
+    }
+    createdTemplates.length = 0;
+  });
+
+  // ... tests use createdVmIds.push(vm.id) and createdTemplates.push(name)
+});
+```
+
 ### Test Flow
 ```typescript
 test('full workflow', async () => {
@@ -1082,6 +1242,7 @@ test('full workflow', async () => {
     name: 'test-vm-1',
     ssh_public_key: TEST_PUBLIC_KEY
   });
+  createdVmIds.push(vm1.id);  // Track for cleanup
   expect(vm1.id).toBeDefined();
   expect(vm1.ssh_port).toBeGreaterThan(22000);
 
@@ -1099,6 +1260,7 @@ test('full workflow', async () => {
   const snapshot = await api.post(`/vms/${vm1.id}/snapshot`, {
     template_name: 'test-snapshot'
   });
+  createdTemplates.push('test-snapshot');  // Track for cleanup
   expect(snapshot.template).toBe('test-snapshot');
 
   // 8. Delete original VM
@@ -1114,6 +1276,7 @@ test('full workflow', async () => {
     name: 'test-vm-2',
     ssh_public_key: TEST_PUBLIC_KEY
   });
+  createdVmIds.push(vm2.id);  // Track for cleanup
 
   // 11. Wait for boot
   await waitForVm(vm2.ip);
@@ -1122,11 +1285,11 @@ test('full workflow', async () => {
   const marker2 = await sshExec(vm2.ssh_port, 'cat /root/marker.txt');
   expect(marker2.trim()).toBe('test-marker');
 
-  // 13. Cleanup
+  // 13. Explicit cleanup (afterEach handles failures, but explicit cleanup verifies API works)
   await api.delete(`/vms/${vm2.id}`);
   await api.delete('/templates/test-snapshot');
 
-  // 14. Verify cleanup
+  // 14. Verify cleanup (afterEach will handle any remaining resources)
   const finalVms = await api.get('/vms');
   expect(finalVms.vms).toHaveLength(0);
 });
@@ -1135,8 +1298,7 @@ test('full workflow', async () => {
 ### SSH Helper for Tests
 ```typescript
 import { $ } from 'bun';
-
-const TEST_KEY_PATH = process.env.TEST_SSH_KEY || './test/id_ed25519';
+import { TEST_PRIVATE_KEY_PATH } from './helpers';
 
 /**
  * Execute a command on a VM via SSH.
@@ -1150,7 +1312,7 @@ const TEST_KEY_PATH = process.env.TEST_SSH_KEY || './test/id_ed25519';
  */
 async function sshExec(port: number, command: string): Promise<string> {
   const host = process.env.VM_HOST;
-  const result = await $`ssh -p ${port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_KEY_PATH} root@${host} ${command}`.text();
+  const result = await $`ssh -p ${port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_PRIVATE_KEY_PATH} root@${host} ${command}`.text();
   return result;
 }
 ```
@@ -1247,7 +1409,7 @@ GET /vms/:id
 Response: VM
 
 POST /vms
-Request: { "template": string, "name"?: string, "ssh_public_key": string }
+Request: { "template": string, "name"?: string, "ssh_public_key": string, "vcpu_count"?: number, "mem_size_mib"?: number }
 Response: 201 Created, VM
 
 DELETE /vms/:id
@@ -1301,7 +1463,10 @@ firecracker-api/
 │   └── rootfs.sh
 ├── test/
 │   ├── integration.test.ts
-│   └── helpers.ts
+│   ├── helpers.ts
+│   └── fixtures/
+│       ├── test_key         # Ed25519 private key (checked into git)
+│       └── test_key.pub     # Ed25519 public key (checked into git)
 ├── do                     # Task runner
 ├── package.json
 ├── tsconfig.json
@@ -1323,7 +1488,7 @@ API_TOKEN=<bearer-token>           # API authentication
 # Required for integration tests
 VM_HOST=<ip-of-target-machine>     # Host running the API
 API_TOKEN=<bearer-token>           # Must match server token
-TEST_SSH_KEY=./test/id_ed25519     # Path to SSH private key for test VMs
+# Note: SSH key is loaded from test/fixtures/test_key (checked into git)
 
 # Optional server config (defaults shown)
 API_PORT=8080
