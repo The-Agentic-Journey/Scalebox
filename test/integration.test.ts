@@ -29,8 +29,15 @@ describe("Firecracker API", () => {
 		const data = await res.json();
 		expect(data.status).toBe("ok");
 	});
-	test.skip("auth rejects missing token", async () => {});
-	test.skip("auth rejects invalid token", async () => {});
+	test("auth rejects missing token", async () => {
+		const { status } = await api.getRaw("/templates");
+		expect(status).toBe(401);
+	});
+
+	test("auth rejects invalid token", async () => {
+		const { status } = await api.getRaw("/templates", "wrong-token");
+		expect(status).toBe(401);
+	});
 
 	// === Phase 3: Templates ===
 	test.skip("lists templates", async () => {});
