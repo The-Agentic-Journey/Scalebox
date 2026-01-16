@@ -6,6 +6,12 @@ A REST API service for managing Firecracker microVMs on a dedicated host. Suppor
 
 **Target Environment:** GCP n1-standard-2 with nested virtualization (dev), Hetzner dedicated server (prod)
 
+**Development VM:**
+- Host: `34.40.56.57`
+- User: `dev` (passwordless sudo)
+- SSH: `ssh dev@34.40.56.57`
+- Dev Token: `dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800`
+
 **Tech Stack:**
 - Runtime: Bun (TypeScript, single-binary compilation)
 - Storage: btrfs with reflink copies for COW efficiency
@@ -215,8 +221,8 @@ import { join } from 'path';
 const FIXTURES_DIR = join(import.meta.dir, 'fixtures');
 
 // API client
-const API_URL = `http://${process.env.VM_HOST || 'localhost'}:8080`;
-const API_TOKEN = process.env.API_TOKEN || 'dev-token';
+const API_URL = `http://${process.env.VM_HOST || '34.40.56.57'}:8080`;
+const API_TOKEN = process.env.API_TOKEN || 'dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800';
 
 export const api = {
   async get(path: string) {
@@ -270,7 +276,7 @@ ssh-keygen -t ed25519 -f test/fixtures/test_key -N "" -C "firecracker-api-test"
 export const config = {
   // Server
   apiPort: parseInt(process.env.API_PORT || '8080'),
-  apiToken: process.env.API_TOKEN || 'dev-token',
+  apiToken: process.env.API_TOKEN || 'dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800',
 
   // Storage
   dataDir: process.env.DATA_DIR || '/var/lib/firecracker',
@@ -316,8 +322,9 @@ export const config = {
 Create reusable provisioning scripts that set up any fresh Ubuntu/Debian VM for Firecracker.
 
 ### Prerequisites
-- SSH access to target VM as root
+- SSH access to target VM with sudo privileges (e.g., `dev@34.40.56.57`)
 - VM has nested virtualization enabled (GCP) or is bare metal
+- Run provisioning scripts with sudo: `sudo ./provision/setup.sh`
 
 ### Steps
 
@@ -1692,11 +1699,11 @@ firecracker-api/
 
 ```bash
 # Required for server
-API_TOKEN=<bearer-token>           # API authentication
+API_TOKEN=dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800
 
 # Required for integration tests
-VM_HOST=<ip-of-target-machine>     # Host running the API
-API_TOKEN=<bearer-token>           # Must match server token
+VM_HOST=34.40.56.57
+API_TOKEN=dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800
 # Note: SSH key is loaded from test/fixtures/test_key (checked into git)
 
 # Optional server config (defaults shown)
@@ -1722,5 +1729,5 @@ PORT_MAX=32000
 ./provision/setup.sh    # Full setup
 
 # Manual testing
-curl -H "Authorization: Bearer dev-token" http://localhost:8080/health
+curl -H "Authorization: Bearer dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800" http://34.40.56.57:8080/health
 ```
