@@ -40,10 +40,27 @@ describe("Firecracker API", () => {
 	});
 
 	// === Phase 3: Templates ===
-	test.skip("lists templates", async () => {});
-	test.skip("debian-base template exists", async () => {});
-	test.skip("delete protected template returns 403", async () => {});
-	test.skip("delete nonexistent template returns 404", async () => {});
+	test("lists templates", async () => {
+		const { status, data } = await api.get("/templates");
+		expect(status).toBe(200);
+		expect(Array.isArray(data.templates)).toBe(true);
+	});
+
+	test("debian-base template exists", async () => {
+		const { data } = await api.get("/templates");
+		const names = data.templates.map((t: { name: string }) => t.name);
+		expect(names).toContain("debian-base");
+	});
+
+	test("delete protected template returns 403", async () => {
+		const { status } = await api.delete("/templates/debian-base");
+		expect(status).toBe(403);
+	});
+
+	test("delete nonexistent template returns 404", async () => {
+		const { status } = await api.delete("/templates/does-not-exist");
+		expect(status).toBe(404);
+	});
 
 	// === Phase 4: VM Lifecycle ===
 	test.skip("create VM returns valid response", async () => {});
