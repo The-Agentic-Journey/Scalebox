@@ -43,10 +43,56 @@ A REST API service for managing Firecracker microVMs on a dedicated host. Suppor
 
 ---
 
+## Development Methodology: Tight ATDD Loops
+
+**Core Principle:** Every code change is preceded by a test assertion. `./do check` MUST pass before every commit.
+
+### The Loop
+
+Each implementation step follows this pattern:
+
+```
+1. Write ONE test assertion (initially skipped with test.skip or .todo)
+2. Run ./do check → MUST PASS (skipped tests don't fail)
+3. Commit: "Add test: <what the test checks>"
+
+4. Implement JUST enough code to pass the assertion
+5. Unskip the test assertion
+6. Run ./do check → MUST PASS
+7. Commit: "Implement: <what was implemented>"
+```
+
+### Rules
+
+1. **No failing tests in commits** - Every commit must have `./do check` passing
+2. **One assertion at a time** - Don't write multiple assertions before implementing
+3. **Minimal implementation** - Only write code needed to pass the current test
+4. **Immediate feedback** - If a test fails, fix it before moving on
+
+### Test Organization
+
+Tests are organized as individual `test()` blocks, not one giant test:
+
+```typescript
+describe('Firecracker API', () => {
+  test('health check returns ok', async () => { ... });
+  test('auth rejects invalid token', async () => { ... });
+  test('lists templates including debian-base', async () => { ... });
+  // ... each assertion is a separate test
+});
+```
+
+This allows:
+- Running specific tests during development
+- Clear failure messages
+- Gradual enabling of tests as features are implemented
+
+---
+
 ## Phase 0: Project Foundation
 
 ### Goal
-Set up the repository structure, tooling, and write the full integration test upfront (ATDD).
+Set up the repository structure, tooling, and create test infrastructure (empty tests that pass).
 
 ### Steps
 
@@ -105,34 +151,120 @@ case "${1:-}" in
 esac
 ```
 
-#### 0.3 Write Full Integration Test (Will Fail Initially)
+#### 0.3 Create Test Infrastructure (All Tests Skipped)
 
-The test defines the complete expected behavior:
+Create the test file with ALL planned tests as `test.skip()`. This documents the full expected behavior while keeping `./do check` passing.
 
 ```typescript
 // test/integration.test.ts
+import { describe, test, afterEach, expect } from 'bun:test';
+
 describe('Firecracker API', () => {
-  test('full workflow: create VM → snapshot → create from snapshot', async () => {
-    // 1. Health check
-    // 2. Verify base template exists
-    // 3. Create VM from template with SSH key
-    // 4. Wait for VM to boot
-    // 5. SSH into VM, create marker file
-    // 6. Snapshot VM to new template
-    // 7. Delete original VM
-    // 8. Create new VM from snapshot template
-    // 9. SSH into new VM, verify marker file exists
-    // 10. Cleanup: delete VM and snapshot template
+  // === Test Helpers & Cleanup (implement in 0.4) ===
+  const createdVmIds: string[] = [];
+  const createdTemplates: string[] = [];
+
+  afterEach(async () => {
+    // Cleanup implementation added later
   });
+
+  // === Phase 2: Health & Auth ===
+  test.skip('health check returns ok', async () => {});
+  test.skip('auth rejects missing token', async () => {});
+  test.skip('auth rejects invalid token', async () => {});
+
+  // === Phase 3: Templates ===
+  test.skip('lists templates', async () => {});
+  test.skip('debian-base template exists', async () => {});
+  test.skip('delete protected template returns 403', async () => {});
+  test.skip('delete nonexistent template returns 404', async () => {});
+
+  // === Phase 4: VM Lifecycle ===
+  test.skip('create VM returns valid response', async () => {});
+  test.skip('created VM appears in list', async () => {});
+  test.skip('get VM by id returns details', async () => {});
+  test.skip('delete VM returns 204', async () => {});
+  test.skip('deleted VM not in list', async () => {});
+
+  // === Phase 5: SSH Access ===
+  test.skip('VM becomes reachable via SSH', async () => {});
+  test.skip('can execute command via SSH', async () => {});
+
+  // === Phase 6: Snapshots ===
+  test.skip('snapshot VM creates template', async () => {});
+  test.skip('snapshot appears in template list', async () => {});
+  test.skip('can create VM from snapshot', async () => {});
+  test.skip('snapshot preserves filesystem state', async () => {});
+
+  // === Phase 7: Cleanup ===
+  test.skip('can delete snapshot template', async () => {});
 });
 ```
 
-#### 0.4 Linter Setup (Biome)
+**Key:** All tests are `test.skip()` so `./do check` passes immediately.
+
+#### 0.4 Test Helpers & Fixtures
+
+Create test helpers that will be used throughout. Since no tests use them yet, `./do check` still passes.
+
+```typescript
+// test/helpers.ts
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const FIXTURES_DIR = join(import.meta.dir, 'fixtures');
+
+// API client
+const API_URL = `http://${process.env.VM_HOST || 'localhost'}:8080`;
+const API_TOKEN = process.env.API_TOKEN || 'dev-token';
+
+export const api = {
+  async get(path: string) {
+    const res = await fetch(`${API_URL}${path}`, {
+      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+    });
+    return { status: res.status, data: res.ok ? await res.json() : null };
+  },
+  async post(path: string, body: unknown) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return { status: res.status, data: res.ok ? await res.json() : null };
+  },
+  async delete(path: string) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+    });
+    return { status: res.status };
+  },
+  async getRaw(path: string, token?: string) {
+    const res = await fetch(`${API_URL}${path}`, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    });
+    return { status: res.status };
+  }
+};
+
+// SSH helpers (to be used later)
+export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, 'test_key');
+export const TEST_PUBLIC_KEY = ''; // Loaded when fixture exists
+```
+
+Generate test SSH keys:
+```bash
+mkdir -p test/fixtures
+ssh-keygen -t ed25519 -f test/fixtures/test_key -N "" -C "firecracker-api-test"
+```
+
+#### 0.5 Linter Setup (Biome)
 - TypeScript strict mode
 - No unused variables
 - Consistent formatting
 
-#### 0.5 Configuration Module
+#### 0.6 Configuration Module
 ```typescript
 // src/config.ts
 export const config = {
@@ -160,18 +292,21 @@ export const config = {
 ```
 
 ### Verification
-- `./do check` runs (test fails, but linter passes)
+- `./do check` passes (all tests skipped = pass)
+- `./do lint` passes
 - Project compiles with `bun build`
 
 ### Done Criteria
 - [ ] Git repo initialized with .gitignore
-- [ ] package.json with dependencies (bun types, test framework)
+- [ ] package.json with dependencies
 - [ ] tsconfig.json with strict settings
 - [ ] biome.json configured
 - [ ] `do` script executable and working
-- [ ] Integration test file exists (fails when run)
-- [ ] `./do lint` passes
-- [ ] Initial commit made
+- [ ] Integration test file with all tests skipped
+- [ ] Test helpers created
+- [ ] Test SSH keys generated
+- [ ] **`./do check` passes**
+- [ ] Committed
 
 ---
 
@@ -509,137 +644,238 @@ rm /tmp/test-vm.ext4
 ## Phase 2: API Skeleton & Health Check
 
 ### Goal
-Create the HTTP server skeleton and implement health check endpoint.
+Create HTTP server with health check and authentication.
 
-### Steps
+**Prerequisites:** Phase 1 complete (host provisioned), API server can be started on target.
 
-#### 2.1 HTTP Server with Bun
-- Use Bun's built-in HTTP server or Hono framework
-- Listen on port 8080
-- Bearer token authentication middleware
-- JSON request/response handling
+---
 
+### Step 2.1: Test health check returns ok
+
+**Test:**
+```typescript
+test('health check returns ok', async () => {
+  const { status, data } = await api.get('/health');
+  expect(status).toBe(200);
+  expect(data.status).toBe('ok');
+});
+```
+
+**Implement:**
 ```typescript
 // src/index.ts
 import { Hono } from 'hono';
-import { bearerAuth } from 'hono/bearer-auth';
+import { config } from './config';
 
 const app = new Hono();
 
-// Auth middleware
-app.use('/*', bearerAuth({ token: process.env.API_TOKEN || 'dev-token' }));
-
-// Health check
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
-// Routes
-app.route('/vms', vmsRouter);
-app.route('/templates', templatesRouter);
-
-export default {
-  port: 8080,
-  fetch: app.fetch,
-};
+export default { port: config.apiPort, fetch: app.fetch };
 ```
 
-#### 2.2 Update Integration Test
-- Test health endpoint
-- Test authentication (valid token works, invalid fails)
+**Verify:** `./do check` passes → **Commit**
 
-### Verification
-- API starts and responds to /health
-- Auth rejects invalid tokens
-- `./do check` - linter passes, test partially passes (health check works)
+---
 
-### Done Criteria
-- [ ] HTTP server running on :8080
-- [ ] Bearer token auth working
-- [ ] GET /health returns 200
-- [ ] Integration test health check passes
-- [ ] Committed
+### Step 2.2: Test auth rejects missing token
+
+**Test:**
+```typescript
+test('auth rejects missing token', async () => {
+  const { status } = await api.getRaw('/health'); // no token
+  expect(status).toBe(401);
+});
+```
+
+**Implement:** Add bearer auth middleware (exclude /health initially, then realize we want auth on everything except the test above needs adjustment - actually health should be unauthed, so:)
+
+Actually, let's keep /health unauthenticated for probes. Test a protected endpoint:
+
+**Test (revised):**
+```typescript
+test('auth rejects missing token', async () => {
+  const { status } = await api.getRaw('/templates'); // no token
+  expect(status).toBe(401);
+});
+```
+
+**Implement:**
+```typescript
+import { bearerAuth } from 'hono/bearer-auth';
+
+// Health check (no auth)
+app.get('/health', (c) => c.json({ status: 'ok' }));
+
+// Protected routes
+app.use('/*', bearerAuth({ token: config.apiToken }));
+app.get('/templates', (c) => c.json({ templates: [] })); // stub
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 2.3: Test auth rejects invalid token
+
+**Test:**
+```typescript
+test('auth rejects invalid token', async () => {
+  const { status } = await api.getRaw('/templates', 'wrong-token');
+  expect(status).toBe(401);
+});
+```
+
+**Implement:** Already covered by bearer auth middleware.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 2 Complete
+- [ ] Health check works (unauthenticated)
+- [ ] Protected routes reject missing/invalid tokens
+- [ ] `./do check` passes
 
 ---
 
 ## Phase 3: Template Management
 
 ### Goal
-Implement template listing. The base template was created during provisioning.
+Implement template listing and deletion.
 
-### Steps
+---
 
-#### 3.1 Template Listing
-```
-GET /templates
+### Step 3.1: Test lists templates
 
-Response:
-{
-  "templates": [
-    {
-      "name": "debian-base",
-      "size_bytes": 2147483648,
-      "created_at": "2025-01-15T10:00:00Z"
-    }
-  ]
-}
-```
-
-- Read /var/lib/firecracker/templates/ directory
-- Return metadata for each .ext4 file
-
-#### 3.2 Template Deletion (for cleanup)
-```
-DELETE /templates/:name
-
-Response: 204 No Content
-
-Errors:
-- 404 Not Found: Template doesn't exist
-- 403 Forbidden: Cannot delete protected template
-- 409 Conflict: Template in use by running VM(s)
-```
-
-**Implementation:**
+**Test:**
 ```typescript
-async function deleteTemplate(name: string): Promise<void> {
-  // Validate template name (prevent path traversal)
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-    throw new BadRequestError('Invalid template name: only alphanumeric, hyphens, underscores allowed');
-  }
-
-  const templatePath = `${config.dataDir}/templates/${name}.ext4`;
-
-  // Check template exists
-  if (!await Bun.file(templatePath).exists()) {
-    throw new NotFoundError(`Template '${name}' not found`);
-  }
-
-  // Check if protected (defined in config.ts)
-  if (config.protectedTemplates.includes(name)) {
-    throw new ForbiddenError(`Cannot delete protected template '${name}'`);
-  }
-
-  // Check no running VMs use this template
-  const vmsUsingTemplate = Array.from(vms.values()).filter(vm => vm.template === name);
-  if (vmsUsingTemplate.length > 0) {
-    throw new ConflictError(`Template '${name}' is in use by ${vmsUsingTemplate.length} VM(s)`);
-  }
-
-  // Delete the file
-  await unlink(templatePath);
-}
+test('lists templates', async () => {
+  const { status, data } = await api.get('/templates');
+  expect(status).toBe(200);
+  expect(Array.isArray(data.templates)).toBe(true);
+});
 ```
 
-### Verification
-- GET /templates returns debian-base
-- DELETE /templates/debian-base returns 403
-- DELETE /templates/nonexistent returns 404
-- Integration test template listing passes
+**Implement:**
+```typescript
+// src/services/template.ts
+import { readdir, stat } from 'fs/promises';
+import { config } from '../config';
 
-### Done Criteria
-- [ ] GET /templates working
-- [ ] DELETE /templates/:name working (except debian-base)
-- [ ] Integration test passes template checks
-- [ ] Committed
+export async function listTemplates() {
+  const dir = `${config.dataDir}/templates`;
+  const files = await readdir(dir);
+  const templates = await Promise.all(
+    files.filter(f => f.endsWith('.ext4')).map(async (f) => {
+      const path = `${dir}/${f}`;
+      const stats = await stat(path);
+      return {
+        name: f.replace('.ext4', ''),
+        size_bytes: stats.size,
+        created_at: stats.mtime.toISOString()
+      };
+    })
+  );
+  return templates;
+}
+
+// In routes:
+app.get('/templates', async (c) => {
+  const templates = await listTemplates();
+  return c.json({ templates });
+});
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 3.2: Test debian-base template exists
+
+**Test:**
+```typescript
+test('debian-base template exists', async () => {
+  const { data } = await api.get('/templates');
+  const names = data.templates.map((t: any) => t.name);
+  expect(names).toContain('debian-base');
+});
+```
+
+**Implement:** Already works if provisioning was done correctly.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 3.3: Test delete protected template returns 403
+
+**Test:**
+```typescript
+test('delete protected template returns 403', async () => {
+  const { status } = await api.delete('/templates/debian-base');
+  expect(status).toBe(403);
+});
+```
+
+**Implement:**
+```typescript
+// src/services/template.ts
+export async function deleteTemplate(name: string): Promise<void> {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw { status: 400, message: 'Invalid template name' };
+  }
+  if (config.protectedTemplates.includes(name)) {
+    throw { status: 403, message: 'Cannot delete protected template' };
+  }
+  // ... rest of implementation
+}
+
+// In routes:
+app.delete('/templates/:name', async (c) => {
+  try {
+    await deleteTemplate(c.req.param('name'));
+    return c.body(null, 204);
+  } catch (e: any) {
+    return c.json({ error: e.message }, e.status || 500);
+  }
+});
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 3.4: Test delete nonexistent template returns 404
+
+**Test:**
+```typescript
+test('delete nonexistent template returns 404', async () => {
+  const { status } = await api.delete('/templates/does-not-exist');
+  expect(status).toBe(404);
+});
+```
+
+**Implement:**
+```typescript
+// In deleteTemplate():
+const templatePath = `${config.dataDir}/templates/${name}.ext4`;
+if (!existsSync(templatePath)) {
+  throw { status: 404, message: 'Template not found' };
+}
+await unlink(templatePath);
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 3 Complete
+- [ ] GET /templates lists templates with metadata
+- [ ] debian-base exists after provisioning
+- [ ] DELETE /templates/:name respects protected list (403)
+- [ ] DELETE /templates/:name returns 404 for missing
+- [ ] `./do check` passes
 
 ---
 
@@ -648,12 +884,14 @@ async function deleteTemplate(name: string): Promise<void> {
 ### Goal
 Implement VM creation, listing, and deletion.
 
-### Steps
+### Reference: Data Structures & Helpers
 
-#### 4.1 VM Data Structures
+These are implemented incrementally as tests require them:
+
 ```typescript
+// VM interface
 interface VM {
-  id: string;           // "vm-" + random hex (12 chars)
+  id: string;           // "vm-" + 12 hex chars
   name?: string;
   template: string;
   ip: string;           // 172.16.x.x
@@ -665,252 +903,292 @@ interface VM {
   createdAt: Date;
 }
 
-// Generate unique VM ID: "vm-" + 12 hex chars
-import { randomBytes } from 'crypto';
-
+// ID generation
 function generateVmId(): string {
   return `vm-${randomBytes(6).toString('hex')}`;
 }
-// Example output: "vm-a1b2c3d4e5f6"
+
+// Port allocation (hash-based with collision detection)
+// Note: Port range (22001-32000 = ~10k) is effective VM limit
+function allocatePort(vmId: string, usedPorts: Set<number>): number { ... }
+
+// MAC address from VM ID
+function vmIdToMac(vmId: string): string { ... }
+
+// Kernel command line
+function buildKernelArgs(ip: string): string { ... }
+
+// Mutex for concurrent VM creation
+async function withVmCreationLock<T>(fn: () => Promise<T>): Promise<T> { ... }
 ```
+
+---
+
+### Step 4.1: Test create VM returns valid response
+
+**Test:**
+```typescript
+test('create VM returns valid response', async () => {
+  const { status, data } = await api.post('/vms', {
+    template: 'debian-base',
+    name: 'test-vm',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  if (data?.id) createdVmIds.push(data.id); // cleanup tracking
+
+  expect(status).toBe(201);
+  expect(data.id).toMatch(/^vm-[a-f0-9]{12}$/);
+  expect(data.template).toBe('debian-base');
+  expect(data.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+  expect(data.ssh_port).toBeGreaterThan(22000);
+});
 ```
 
-#### 4.2 IP Allocation
-- Pool: 172.16.0.2 - 172.16.255.254
-- Track allocated IPs in memory
-- On startup: scan running VMs to rebuild allocation state
-
-#### 4.3 Port Allocation (Hash-based with Collision Detection)
-
-**Note:** The port range (22001-32000 = ~10,000 ports) is the effective VM limit, not the IP range (172.16.0.0/16 = ~65k IPs). Each VM needs a unique SSH proxy port.
+**Implement:** This is the big one. Implement VM creation:
+1. Validate template exists
+2. Generate VM ID, allocate IP and port
+3. Copy rootfs with reflink
+4. Inject SSH key
+5. Create TAP device
+6. Start Firecracker, configure and boot
+7. Start TCP proxy
+8. Return VM details
 
 ```typescript
-const PORT_MIN = 22001;
-const PORT_MAX = 32000;
-// Effective limit: PORT_MAX - PORT_MIN + 1 = 10,000 concurrent VMs
-
-function vmIdToPort(vmId: string): number {
-  const hash = createHash('sha256').update(vmId).digest();
-  const num = hash.readUInt32BE(0);
-  return PORT_MIN + (num % (PORT_MAX - PORT_MIN + 1));
-}
-
-// Collision-safe allocation: if hash collides, linear probe to next free port
-function allocatePort(vmId: string, usedPorts: Set<number>): number {
-  let port = vmIdToPort(vmId);
-  const startPort = port;
-
-  while (usedPorts.has(port)) {
-    port = port + 1 > PORT_MAX ? PORT_MIN : port + 1;
-    if (port === startPort) {
-      throw new Error('No available ports');
-    }
-  }
-
-  usedPorts.add(port);
-  return port;
-}
-```
-
-Note: `usedPorts` is derived from in-memory VM state, rebuilt on startup.
-
-#### 4.4 Mutex for VM Creation
-
-Concurrent VM creation can cause race conditions (duplicate IPs, port collisions). Use a simple async mutex:
-
-```typescript
-// Simple mutex using while-loop spin lock
-let vmCreationLock = false;
-
-async function withVmCreationLock<T>(fn: () => Promise<T>): Promise<T> {
-  // Wait for lock to be released
-  while (vmCreationLock) {
-    await Bun.sleep(10);
-  }
-  vmCreationLock = true;
-  try {
-    return await fn();
-  } finally {
-    vmCreationLock = false;
-  }
-}
-
-// Usage in createVm handler:
+// POST /vms handler
 app.post('/vms', async (c) => {
   return withVmCreationLock(async () => {
-    // ... VM creation logic
+    const body = await c.req.json();
+    const vm = await createVm(body);
+    return c.json(vmToResponse(vm), 201);
   });
 });
 ```
 
-#### 4.5 VM Creation
-```
-POST /vms
-{
-  "template": "debian-base",
-  "name": "my-vm",
-  "ssh_public_key": "ssh-ed25519 AAAA...",
-  "vcpu_count": 2,         // Optional, defaults to config.defaultVcpuCount
-  "mem_size_mib": 512      // Optional, defaults to config.defaultMemSizeMib
-}
-
-Response: 201 Created
-{
-  "id": "vm-a1b2c3d4",
-  "name": "my-vm",
-  "template": "debian-base",
-  "ip": "172.16.0.2",
-  "ssh_port": 22547,
-  "ssh": "ssh -p 22547 root@<host>",
-  "status": "running",
-  "created_at": "2025-01-15T10:30:00Z"
-}
-```
-
-**MAC Address Generation:**
-```typescript
-// Generate unique MAC from VM ID: AA:FC:xx:xx:xx:xx
-function vmIdToMac(vmId: string): string {
-  const hash = createHash('sha256').update(vmId).digest();
-  return `AA:FC:${hash.subarray(0, 4).toString('hex').match(/.{2}/g)!.join(':')}`;
-}
-// Example: vm-abc123 → AA:FC:3a:f2:91:c7
-```
-
-**Kernel Command Line:**
-```typescript
-// Build kernel boot arguments for VM networking
-function buildKernelArgs(ip: string, gateway: string = '172.16.0.1'): string {
-  // Format: ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>
-  // See: https://www.kernel.org/doc/html/latest/admin-guide/nfs/nfsroot.html
-  return [
-    'console=ttyS0',
-    'reboot=k',
-    'panic=1',
-    'pci=off',
-    `ip=${ip}::${gateway}:255.255.0.0::eth0:off`
-  ].join(' ');
-}
-// Example: buildKernelArgs('172.16.0.2')
-// → "console=ttyS0 reboot=k panic=1 pci=off ip=172.16.0.2::172.16.0.1:255.255.0.0::eth0:off"
-```
-
-**Steps:**
-1. Validate template exists
-2. Allocate IP from pool
-3. Generate VM ID
-4. Calculate SSH port from ID (with collision detection)
-5. Generate MAC address from ID
-6. Copy template rootfs with reflink: `cp --reflink=auto`
-7. Mount rootfs, inject SSH public key into /root/.ssh/authorized_keys, unmount
-8. Create TAP device, attach to bridge
-9. Start Firecracker process with Unix socket
-10. Configure VM via Firecracker API (kernel, rootfs, network with MAC, machine config)
-11. Start VM instance
-12. Start TCP proxy for SSH port
-13. Return VM details
-
-#### 4.5 VM Listing
-```
-GET /vms
-
-Response:
-{
-  "vms": [
-    { "id": "vm-a1b2c3d4", "name": "my-vm", "ip": "172.16.0.2", ... }
-  ]
-}
-```
-
-#### 4.6 VM Details
-```
-GET /vms/:id
-
-Response:
-{ "id": "vm-a1b2c3d4", ... }
-```
-
-#### 4.7 VM Deletion
-```
-DELETE /vms/:id
-
-Response: 204 No Content
-```
-
-**Steps:**
-1. Stop TCP proxy for this VM
-2. Send InstanceHalt to Firecracker API (or kill process)
-3. Remove TAP device
-4. Delete rootfs file
-5. Release IP back to pool
-6. Remove from in-memory state
-
-### Verification
-- Create VM returns valid response
-- VM appears in GET /vms
-- Firecracker process is running
-- TAP device exists
-- VM has IP connectivity (ping from host)
-- Delete removes everything cleanly
-
-### Done Criteria
-- [ ] POST /vms creates working VM
-- [ ] GET /vms lists VMs
-- [ ] GET /vms/:id returns VM details
-- [ ] DELETE /vms/:id cleans up completely
-- [ ] Integration test: create/list/delete cycle passes
-- [ ] Committed
+**Verify:** `./do check` passes → **Commit**
 
 ---
 
-## Phase 5: TCP Proxy for SSH
+### Step 4.2: Test created VM appears in list
+
+**Test:**
+```typescript
+test('created VM appears in list', async () => {
+  // Create a VM first
+  const { data: created } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(created.id);
+
+  // List VMs
+  const { status, data } = await api.get('/vms');
+  expect(status).toBe(200);
+  expect(data.vms.some((v: any) => v.id === created.id)).toBe(true);
+});
+```
+
+**Implement:**
+```typescript
+app.get('/vms', (c) => {
+  return c.json({ vms: Array.from(vms.values()).map(vmToResponse) });
+});
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 4.3: Test get VM by id returns details
+
+**Test:**
+```typescript
+test('get VM by id returns details', async () => {
+  const { data: created } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(created.id);
+
+  const { status, data } = await api.get(`/vms/${created.id}`);
+  expect(status).toBe(200);
+  expect(data.id).toBe(created.id);
+});
+```
+
+**Implement:**
+```typescript
+app.get('/vms/:id', (c) => {
+  const vm = vms.get(c.req.param('id'));
+  if (!vm) return c.json({ error: 'VM not found' }, 404);
+  return c.json(vmToResponse(vm));
+});
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 4.4: Test delete VM returns 204
+
+**Test:**
+```typescript
+test('delete VM returns 204', async () => {
+  const { data: created } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  // Don't add to cleanup - we're testing delete
+
+  const { status } = await api.delete(`/vms/${created.id}`);
+  expect(status).toBe(204);
+});
+```
+
+**Implement:** VM deletion:
+1. Stop TCP proxy
+2. Kill Firecracker process
+3. Remove TAP device
+4. Delete rootfs
+5. Release IP
+6. Remove from state
+
+```typescript
+app.delete('/vms/:id', async (c) => {
+  const vm = vms.get(c.req.param('id'));
+  if (!vm) return c.json({ error: 'VM not found' }, 404);
+  await deleteVm(vm);
+  return c.body(null, 204);
+});
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 4.5: Test deleted VM not in list
+
+**Test:**
+```typescript
+test('deleted VM not in list', async () => {
+  const { data: created } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  await api.delete(`/vms/${created.id}`);
+
+  const { data } = await api.get('/vms');
+  expect(data.vms.some((v: any) => v.id === created.id)).toBe(false);
+});
+```
+
+**Implement:** Already works if deleteVm removes from state.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 4 Complete
+- [ ] POST /vms creates VM and returns details
+- [ ] GET /vms lists all VMs
+- [ ] GET /vms/:id returns specific VM
+- [ ] DELETE /vms/:id removes VM
+- [ ] `./do check` passes
+
+---
+
+## Phase 5: SSH Access
 
 ### Goal
-Implement TCP proxy so external clients can SSH to VMs via allocated ports.
+Verify SSH connectivity through TCP proxy (proxy implemented in Phase 4 as part of VM creation).
 
-### Steps
+---
 
-#### 5.1 TCP Proxy Implementation
+### Step 5.1: Test VM becomes reachable via SSH
+
+**Test:**
+```typescript
+test('VM becomes reachable via SSH', async () => {
+  const { data: vm } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm.id);
+
+  // Wait for SSH to be ready (VM boot + SSH daemon start)
+  await waitForSsh(vm.ssh_port, 30000);
+});
+
+// Helper in test/helpers.ts
+async function waitForSsh(port: number, timeoutMs: number): Promise<void> {
+  const host = process.env.VM_HOST || 'localhost';
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await $`nc -z ${host} ${port}`.quiet();
+      return;
+    } catch {
+      await Bun.sleep(500);
+    }
+  }
+  throw new Error(`SSH not ready on port ${port} within ${timeoutMs}ms`);
+}
+```
+
+**Implement:** Proxy should already work from Phase 4. This test verifies it.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 5.2: Test can execute command via SSH
+
+**Test:**
+```typescript
+test('can execute command via SSH', async () => {
+  const { data: vm } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm.id);
+
+  await waitForSsh(vm.ssh_port, 30000);
+
+  const output = await sshExec(vm.ssh_port, 'echo hello');
+  expect(output.trim()).toBe('hello');
+});
+
+// Helper in test/helpers.ts
+async function sshExec(port: number, command: string): Promise<string> {
+  const host = process.env.VM_HOST || 'localhost';
+  return await $`ssh -p ${port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_PRIVATE_KEY_PATH} root@${host} ${command}`.text();
+}
+```
+
+**Implement:** Already works if SSH key injection and proxy work.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 5 Complete
+- [ ] VM SSH port becomes reachable after boot
+- [ ] Can execute commands via SSH
+- [ ] `./do check` passes
+
+### Reference: Proxy Implementation
+
 ```typescript
 // src/proxy.ts
-import * as net from 'net';
-
-const proxies = new Map<string, net.Server>();
-const connections = new Map<string, Set<net.Socket>>();
-
 export function startProxy(vmId: string, localPort: number, targetIp: string, targetPort: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const sockets = new Set<net.Socket>();
-    connections.set(vmId, sockets);
-
     const server = net.createServer((clientSocket) => {
       const vmSocket = net.createConnection(targetPort, targetIp);
-
-      // Track both sockets for cleanup
-      sockets.add(clientSocket);
-      sockets.add(vmSocket);
-
       clientSocket.pipe(vmSocket);
       vmSocket.pipe(clientSocket);
-
-      const cleanup = () => {
-        sockets.delete(clientSocket);
-        sockets.delete(vmSocket);
-        clientSocket.destroy();
-        vmSocket.destroy();
-      };
-
-      clientSocket.on('error', cleanup);
-      clientSocket.on('close', cleanup);
-      vmSocket.on('error', cleanup);
-      vmSocket.on('close', cleanup);
+      // ... error handling, socket tracking
     });
-
-    server.on('error', (err) => {
-      connections.delete(vmId);
-      reject(err);
-    });
-
+    server.on('error', reject);
     server.listen(localPort, '0.0.0.0', () => {
       proxies.set(vmId, server);
       resolve();
@@ -919,41 +1197,9 @@ export function startProxy(vmId: string, localPort: number, targetIp: string, ta
 }
 
 export function stopProxy(vmId: string) {
-  // First: destroy all active connections (prevents zombie sessions)
-  const sockets = connections.get(vmId);
-  if (sockets) {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    connections.delete(vmId);
-  }
-
-  // Then: close the server (stops accepting new connections)
-  const server = proxies.get(vmId);
-  if (server) {
-    server.close();
-    proxies.delete(vmId);
-  }
+  // Destroy active connections, then close server
 }
 ```
-
-**Why track connections:** `server.close()` only stops accepting new connections. Existing SSH sessions would become zombies, leaking file descriptors. By tracking sockets, we ensure clean termination when a VM is deleted.
-
-#### 5.2 Integrate with VM Lifecycle
-- Start proxy when VM is created
-- Stop proxy when VM is deleted
-
-### Verification
-- SSH to host:port connects to VM
-- Multiple concurrent SSH sessions work
-- Proxy cleans up on VM deletion
-
-### Done Criteria
-- [ ] TCP proxy starts on VM creation
-- [ ] SSH through proxy works
-- [ ] Proxy stops on VM deletion
-- [ ] Integration test: SSH into VM passes
-- [ ] Committed
 
 ---
 
@@ -962,368 +1208,296 @@ export function stopProxy(vmId: string) {
 ### Goal
 Implement snapshotting a VM's rootfs to create a new template.
 
-### Steps
+---
 
-#### 6.1 Snapshot Endpoint
-```
-POST /vms/:id/snapshot
-{
-  "template_name": "my-snapshot"
-}
+### Step 6.1: Test snapshot VM creates template
 
-Response: 201 Created
-{
-  "template": "my-snapshot",
-  "source_vm": "vm-a1b2c3d4",
-  "size_bytes": 2147483648,
-  "created_at": "2025-01-15T11:00:00Z"
-}
-```
-
-**Steps:**
-1. Validate VM exists
-2. Validate template_name (alphanumeric, hyphens, underscores only - prevent path traversal)
-3. Validate template_name doesn't already exist
-4. **Pause VM** via Firecracker API to ensure filesystem consistency
-5. Copy rootfs to templates directory with reflink
-6. **Resume VM** via Firecracker API
-7. Clear SSH authorized_keys in the template copy (so next VM gets fresh injection)
-8. Return template metadata
-
-**Template Name Validation (prevent path traversal):**
+**Test:**
 ```typescript
-if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
-  throw new Error('Invalid template name: only alphanumeric, hyphens, underscores allowed');
-}
+test('snapshot VM creates template', async () => {
+  const { data: vm } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm.id);
+
+  const { status, data } = await api.post(`/vms/${vm.id}/snapshot`, {
+    template_name: 'test-snapshot'
+  });
+  createdTemplates.push('test-snapshot'); // cleanup tracking
+
+  expect(status).toBe(201);
+  expect(data.template).toBe('test-snapshot');
+  expect(data.source_vm).toBe(vm.id);
+});
 ```
 
-#### 6.2 Full Snapshot Implementation
+**Implement:**
 ```typescript
+app.post('/vms/:id/snapshot', async (c) => {
+  const vm = vms.get(c.req.param('id'));
+  if (!vm) return c.json({ error: 'VM not found' }, 404);
+
+  const { template_name } = await c.req.json();
+  const template = await snapshotVm(vm, template_name);
+  return c.json({
+    template: template.name,
+    source_vm: vm.id,
+    size_bytes: template.size_bytes,
+    created_at: template.created_at
+  }, 201);
+});
+
 async function snapshotVm(vm: VM, templateName: string): Promise<Template> {
-  const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
-  const mountPoint = `/mnt/template-${templateName}`;
-
-  // Validate template name
+  // 1. Validate name (path traversal prevention)
   if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
-    throw new BadRequestError('Invalid template name');
+    throw { status: 400, message: 'Invalid template name' };
   }
-
-  // Check template doesn't already exist
-  if (await Bun.file(templatePath).exists()) {
-    throw new ConflictError(`Template '${templateName}' already exists`);
-  }
-
-  // Pause VM for consistent snapshot
-  await pauseVm(vm);
-
-  try {
-    // Copy rootfs with reflink (instant COW copy)
-    await $`cp --reflink=auto ${vm.rootfsPath} ${templatePath}`;
-  } finally {
-    // Always resume VM, even if copy fails
-    await resumeVm(vm);
-  }
-
-  // Clear SSH keys from template (not the running VM)
-  // If this fails, delete the template to avoid leaking SSH keys
-  try {
-    await $`mkdir -p ${mountPoint}`;
-    await $`mount ${templatePath} ${mountPoint}`;
-    await $`truncate -s 0 ${mountPoint}/root/.ssh/authorized_keys`;
-  } catch (error) {
-    // Cleanup: delete partial template to prevent SSH key leakage
-    await $`umount ${mountPoint} 2>/dev/null || true`;
-    await $`rmdir ${mountPoint} 2>/dev/null || true`;
-    await $`rm -f ${templatePath}`;
-    throw error;
-  } finally {
-    // Always unmount and cleanup mount point
-    await $`umount ${mountPoint} 2>/dev/null || true`;
-    await $`rmdir ${mountPoint} 2>/dev/null || true`;
-  }
-
-  const stats = await Bun.file(templatePath).stat();
-  return {
-    name: templateName,
-    size_bytes: stats.size,
-    created_at: new Date().toISOString(),
-  };
-}
-
-async function pauseVm(vm: VM): Promise<void> {
-  await fetch('http://localhost/vm', {
-    method: 'PATCH',
-    // @ts-ignore - Bun supports socketPath
-    unix: vm.socketPath,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state: 'Paused' }),
-  });
-}
-
-async function resumeVm(vm: VM): Promise<void> {
-  await fetch('http://localhost/vm', {
-    method: 'PATCH',
-    // @ts-ignore - Bun supports socketPath
-    unix: vm.socketPath,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state: 'Resumed' }),
-  });
+  // 2. Check doesn't exist
+  // 3. Pause VM
+  // 4. Copy rootfs with reflink
+  // 5. Resume VM
+  // 6. Clear SSH keys (delete template on failure)
+  // 7. Return metadata
 }
 ```
 
-**Key points:**
-- Uses `try/finally` to ensure VM is always resumed, even if copy fails
-- Uses unique mount point per template to avoid collisions
-- Clears SSH keys so new VMs get fresh key injection
-- Total VM pause time ~100ms (reflink copy is instant)
-
-### Verification
-- Snapshot creates new template file
-- New template appears in GET /templates
-- New VMs can be created from snapshot
-
-### Done Criteria
-- [ ] POST /vms/:id/snapshot creates template
-- [ ] Template appears in listing
-- [ ] VM can be created from snapshot
-- [ ] Integration test: snapshot workflow passes
-- [ ] Committed
+**Verify:** `./do check` passes → **Commit**
 
 ---
 
-## Phase 7: Full Integration Test
+### Step 6.2: Test snapshot appears in template list
 
-### Goal
-Complete the integration test to verify the full workflow.
+**Test:**
+```typescript
+test('snapshot appears in template list', async () => {
+  const { data: vm } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm.id);
 
-### Test Fixtures
+  await api.post(`/vms/${vm.id}/snapshot`, { template_name: 'test-snap-list' });
+  createdTemplates.push('test-snap-list');
 
-#### Test SSH Keys
-
-Create test SSH keys (checked into git - for testing only):
-
-```bash
-# Generate ed25519 key pair for testing
-ssh-keygen -t ed25519 -f test/fixtures/test_key -N "" -C "firecracker-api-test"
+  const { data } = await api.get('/templates');
+  const names = data.templates.map((t: any) => t.name);
+  expect(names).toContain('test-snap-list');
+});
 ```
 
-This creates:
-- `test/fixtures/test_key` - Private key
-- `test/fixtures/test_key.pub` - Public key
+**Implement:** Already works if snapshot writes to templates directory.
 
-**Note:** These keys are for testing only. They are committed to git to ensure reproducible tests.
+**Verify:** `./do check` passes → **Commit**
 
-### Test Helpers
+---
 
-#### Test Key Loading
+### Step 6.3: Test can create VM from snapshot
+
+**Test:**
 ```typescript
-// test/helpers.ts
-import { readFileSync } from 'fs';
-import { join } from 'path';
+test('can create VM from snapshot', async () => {
+  // Create VM and snapshot
+  const { data: vm1 } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm1.id);
 
-const FIXTURES_DIR = join(import.meta.dir, 'fixtures');
-export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, 'test_key');
-export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, 'test_key.pub'), 'utf-8').trim();
+  await api.post(`/vms/${vm1.id}/snapshot`, { template_name: 'test-snap-create' });
+  createdTemplates.push('test-snap-create');
+
+  // Create VM from snapshot
+  const { status, data: vm2 } = await api.post('/vms', {
+    template: 'test-snap-create',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm2.id);
+
+  expect(status).toBe(201);
+  expect(vm2.template).toBe('test-snap-create');
+});
 ```
 
-#### API Client with Authentication
+**Implement:** Already works if VM creation reads from templates directory.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 6.4: Test snapshot preserves filesystem state
+
+**Test:**
 ```typescript
-// test/helpers.ts
-const API_URL = `http://${process.env.VM_HOST}:8080`;
-const API_TOKEN = process.env.API_TOKEN || 'dev-token';
+test('snapshot preserves filesystem state', async () => {
+  // Create VM, write marker file
+  const { data: vm1 } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm1.id);
+  await waitForSsh(vm1.ssh_port, 30000);
+  await sshExec(vm1.ssh_port, 'echo MARKER > /root/marker.txt');
 
-export const api = {
-  async get(path: string) {
-    const res = await fetch(`${API_URL}${path}`, {
-      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
-    });
-    if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
-    return res.json();
-  },
+  // Snapshot
+  await api.post(`/vms/${vm1.id}/snapshot`, { template_name: 'test-snap-state' });
+  createdTemplates.push('test-snap-state');
 
-  async post(path: string, body: unknown) {
-    const res = await fetch(`${API_URL}${path}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
-    return res.json();
-  },
+  // Create VM from snapshot
+  const { data: vm2 } = await api.post('/vms', {
+    template: 'test-snap-state',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm2.id);
+  await waitForSsh(vm2.ssh_port, 30000);
 
-  async delete(path: string) {
-    const res = await fetch(`${API_URL}${path}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
-    });
-    if (!res.ok && res.status !== 204) {
-      throw new Error(`DELETE ${path}: ${res.status}`);
-    }
+  // Verify marker file exists
+  const marker = await sshExec(vm2.ssh_port, 'cat /root/marker.txt');
+  expect(marker.trim()).toBe('MARKER');
+});
+```
+
+**Implement:** Already works if snapshot copies filesystem correctly.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 6 Complete
+- [ ] POST /vms/:id/snapshot creates template
+- [ ] Snapshot appears in template list
+- [ ] Can create VM from snapshot
+- [ ] Snapshot preserves filesystem state
+- [ ] `./do check` passes
+
+### Reference: Snapshot Implementation
+
+```typescript
+async function snapshotVm(vm: VM, templateName: string): Promise<Template> {
+  // Validate, check doesn't exist
+  await pauseVm(vm);
+  try {
+    await $`cp --reflink=auto ${vm.rootfsPath} ${templatePath}`;
+  } finally {
+    await resumeVm(vm);
   }
-};
-```
-
-#### VM Readiness Helper
-```typescript
-// Wait for VM's SSH to become available
-async function waitForVm(ip: string, timeoutMs = 30000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await $`nc -z ${ip} 22`.quiet();
-      return;
-    } catch {
-      await Bun.sleep(500);
-    }
-  }
-  throw new Error(`VM ${ip} did not become ready within ${timeoutMs}ms`);
+  // Clear SSH keys (delete template on failure)
+  // Return metadata
 }
 ```
 
-### Test Cleanup Pattern
+---
 
-Track created resources and clean up after each test, even on failure:
+## Phase 7: Cleanup & Final Tests
 
+### Goal
+Add final cleanup tests and verify all tests pass.
+
+---
+
+### Step 7.1: Test can delete snapshot template
+
+**Test:**
 ```typescript
-// test/integration.test.ts
-import { describe, test, afterEach, expect } from 'bun:test';
-import { api, TEST_PUBLIC_KEY } from './helpers';
+test('can delete snapshot template', async () => {
+  // Create VM and snapshot
+  const { data: vm } = await api.post('/vms', {
+    template: 'debian-base',
+    ssh_public_key: TEST_PUBLIC_KEY
+  });
+  createdVmIds.push(vm.id);
 
+  await api.post(`/vms/${vm.id}/snapshot`, { template_name: 'test-snap-delete' });
+  // Don't track - we're testing delete
+
+  // Delete the snapshot template
+  const { status } = await api.delete('/templates/test-snap-delete');
+  expect(status).toBe(204);
+
+  // Verify it's gone
+  const { data } = await api.get('/templates');
+  const names = data.templates.map((t: any) => t.name);
+  expect(names).not.toContain('test-snap-delete');
+});
+```
+
+**Implement:** Already works if deleteTemplate handles non-protected templates.
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Phase 7 Complete
+
+At this point, all tests are enabled and passing:
+
+```
+✓ health check returns ok
+✓ auth rejects missing token
+✓ auth rejects invalid token
+✓ lists templates
+✓ debian-base template exists
+✓ delete protected template returns 403
+✓ delete nonexistent template returns 404
+✓ create VM returns valid response
+✓ created VM appears in list
+✓ get VM by id returns details
+✓ delete VM returns 204
+✓ deleted VM not in list
+✓ VM becomes reachable via SSH
+✓ can execute command via SSH
+✓ snapshot VM creates template
+✓ snapshot appears in template list
+✓ can create VM from snapshot
+✓ snapshot preserves filesystem state
+✓ can delete snapshot template
+```
+
+### Test Infrastructure Reference
+
+**Test Fixtures:**
+```
+test/fixtures/
+├── test_key       # Ed25519 private key
+└── test_key.pub   # Ed25519 public key
+```
+
+**Test Helpers (test/helpers.ts):**
+```typescript
+// API client
+export const api = { get, post, delete, getRaw };
+
+// SSH
+export const TEST_PRIVATE_KEY_PATH = '...';
+export const TEST_PUBLIC_KEY = '...';
+export async function waitForSsh(port: number, timeoutMs: number): Promise<void>;
+export async function sshExec(port: number, command: string): Promise<string>;
+```
+
+**Cleanup Pattern:**
+```typescript
 describe('Firecracker API', () => {
-  // Track resources created during tests
   const createdVmIds: string[] = [];
   const createdTemplates: string[] = [];
 
   afterEach(async () => {
-    // Clean up VMs first (templates may depend on them being deleted)
+    // Clean up VMs first, then templates
     for (const vmId of createdVmIds) {
-      try {
-        await api.delete(`/vms/${vmId}`);
-      } catch {
-        // Ignore errors - VM may already be deleted
-      }
+      try { await api.delete(`/vms/${vmId}`); } catch {}
     }
     createdVmIds.length = 0;
-
-    // Clean up templates
     for (const template of createdTemplates) {
-      try {
-        await api.delete(`/templates/${template}`);
-      } catch {
-        // Ignore errors - template may already be deleted or protected
-      }
+      try { await api.delete(`/templates/${template}`); } catch {}
     }
     createdTemplates.length = 0;
   });
-
-  // ... tests use createdVmIds.push(vm.id) and createdTemplates.push(name)
 });
 ```
 
-### Test Flow
-```typescript
-test('full workflow', async () => {
-  // 1. Health check
-  const health = await api.get('/health');
-  expect(health.status).toBe(200);
-
-  // 2. List templates, verify debian-base exists
-  const templates = await api.get('/templates');
-  expect(templates.templates).toContainEqual(
-    expect.objectContaining({ name: 'debian-base' })
-  );
-
-  // 3. Create VM from debian-base
-  const vm1 = await api.post('/vms', {
-    template: 'debian-base',
-    name: 'test-vm-1',
-    ssh_public_key: TEST_PUBLIC_KEY
-  });
-  createdVmIds.push(vm1.id);  // Track for cleanup
-  expect(vm1.id).toBeDefined();
-  expect(vm1.ssh_port).toBeGreaterThan(22000);
-
-  // 4. Wait for VM to boot (poll or fixed delay)
-  await waitForVm(vm1.ip);
-
-  // 5. SSH into VM, create marker file
-  await sshExec(vm1.ssh_port, 'echo "test-marker" > /root/marker.txt');
-
-  // 6. Verify marker file
-  const marker1 = await sshExec(vm1.ssh_port, 'cat /root/marker.txt');
-  expect(marker1.trim()).toBe('test-marker');
-
-  // 7. Snapshot VM to new template
-  const snapshot = await api.post(`/vms/${vm1.id}/snapshot`, {
-    template_name: 'test-snapshot'
-  });
-  createdTemplates.push('test-snapshot');  // Track for cleanup
-  expect(snapshot.template).toBe('test-snapshot');
-
-  // 8. Delete original VM
-  await api.delete(`/vms/${vm1.id}`);
-
-  // 9. Verify VM is gone
-  const vms = await api.get('/vms');
-  expect(vms.vms.find(v => v.id === vm1.id)).toBeUndefined();
-
-  // 10. Create new VM from snapshot
-  const vm2 = await api.post('/vms', {
-    template: 'test-snapshot',
-    name: 'test-vm-2',
-    ssh_public_key: TEST_PUBLIC_KEY
-  });
-  createdVmIds.push(vm2.id);  // Track for cleanup
-
-  // 11. Wait for boot
-  await waitForVm(vm2.ip);
-
-  // 12. Verify marker file persisted
-  const marker2 = await sshExec(vm2.ssh_port, 'cat /root/marker.txt');
-  expect(marker2.trim()).toBe('test-marker');
-
-  // 13. Explicit cleanup (afterEach handles failures, but explicit cleanup verifies API works)
-  await api.delete(`/vms/${vm2.id}`);
-  await api.delete('/templates/test-snapshot');
-
-  // 14. Verify cleanup (afterEach will handle any remaining resources)
-  const finalVms = await api.get('/vms');
-  expect(finalVms.vms).toHaveLength(0);
-});
-```
-
-### SSH Helper for Tests
-```typescript
-import { $ } from 'bun';
-import { TEST_PRIVATE_KEY_PATH } from './helpers';
-
-/**
- * Execute a command on a VM via SSH.
- *
- * LIMITATION: Use only for simple, single commands. The command is passed
- * directly to the remote shell, so complex commands with quotes or special
- * characters may not work as expected. For test purposes, keep commands simple:
- *   - OK: 'cat /root/marker.txt'
- *   - OK: 'echo test > /root/file.txt'
- *   - AVOID: 'echo "hello world"' (nested quotes)
- */
-async function sshExec(port: number, command: string): Promise<string> {
-  const host = process.env.VM_HOST;
-  const result = await $`ssh -p ${port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_PRIVATE_KEY_PATH} root@${host} ${command}`.text();
-  return result;
-}
-```
-
-### Verification
-- Full test passes end-to-end
-- `./do check` passes completely
+---
 
 ### Done Criteria
-- [ ] Integration test runs full workflow
-- [ ] All assertions pass
+- [ ] All 19 tests enabled and passing
 - [ ] `./do check` exits 0
 - [ ] Committed
 
@@ -1332,46 +1506,81 @@ async function sshExec(port: number, command: string): Promise<string> {
 ## Phase 8: Polish & Hardening
 
 ### Goal
-Production-readiness improvements.
+Production-readiness improvements. These don't require new tests - they improve existing functionality.
 
-### Steps
+**Rule:** Each improvement must keep `./do check` passing.
 
-#### 8.1 Error Handling
-- Proper HTTP error responses (400, 404, 500)
-- Cleanup on partial failures (e.g., VM creation fails midway)
-- Graceful shutdown (stop all VMs, proxies)
+---
 
-#### 8.2 Logging
-- Request logging
-- VM lifecycle events
-- Error logging with context
+### Step 8.1: Error handling cleanup
 
-#### 8.3 Process Management
-- Handle Firecracker process crashes
-- Recover state on API restart
-- systemd service file for production
+- Ensure all errors return proper HTTP status codes
+- Add cleanup on partial VM creation failures
+- Add graceful shutdown (stop all VMs on SIGTERM)
 
-#### 8.4 Configuration
-- Environment variables for all settings
-- API_TOKEN, API_PORT, DATA_DIR, etc.
+**Verify:** `./do check` passes → **Commit**
 
-#### 8.5 Single Binary Build
+---
+
+### Step 8.2: Logging
+
+- Add request logging middleware
+- Log VM lifecycle events (create, delete, snapshot)
+- Log errors with context
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 8.3: State recovery
+
+- On startup, scan for orphaned Firecracker processes
+- Rebuild in-memory state from running VMs
+- Clean up stale TAP devices and rootfs files
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 8.4: systemd service
+
+Create `firecracker-api.service`:
+```ini
+[Unit]
+Description=Firecracker VM API
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/firecracker-api
+Environment=API_TOKEN=<token>
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Verify:** `./do check` passes → **Commit**
+
+---
+
+### Step 8.5: Single binary build
+
 ```bash
 bun build --compile --outfile=firecracker-api ./src/index.ts
 ```
 
-### Verification
-- Service recovers from restart
-- Errors return proper HTTP codes
-- Logs are useful for debugging
+**Verify:** Binary runs, `./do check` passes → **Commit**
 
-### Done Criteria
+---
+
+### Phase 8 Complete
 - [ ] Error handling comprehensive
 - [ ] Logging in place
 - [ ] State recovery on restart
-- [ ] Single binary builds
 - [ ] systemd service file created
-- [ ] Committed
+- [ ] Single binary builds
+- [ ] `./do check` passes
 
 ---
 
