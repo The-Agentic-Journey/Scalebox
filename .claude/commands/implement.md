@@ -3,7 +3,7 @@
 You are tasked with implementing a plan from a specified file. Follow these instructions carefully.
 
 ## Input
-The user will provide a file path to a plan document (e.g., `product/002_assistant_ui.md` or `@product/002_assistant_ui.md`). Or with a plan file and the instruction, which contained step to implement.
+The user will provide a file path to a plan document (e.g., `product/002_assistant_ui.md` or `@product/002_assistant_ui.md`).
 
 If no input file is provided check, wether the current session contains a plan. If so, pick this plan.
 
