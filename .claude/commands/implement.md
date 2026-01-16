@@ -35,6 +35,26 @@ c) **Verify and Fix with Sub-Agents** (CRITICAL - Orchestration pattern):
 
    **Verification Loop:**
    1. Run `./do check` to verify builds pass
+
+      **THIS IS LITERAL - NO SUBSTITUTIONS:**
+      ```bash
+      ./do check
+      ```
+      - ❌ `bun test` is NOT `./do check`
+      - ❌ `bun run lint` is NOT `./do check`
+      - ❌ `npm test` is NOT `./do check`
+      - ❌ Any local-only command is NOT `./do check`
+
+      **Verify you see the FULL pipeline run:**
+      - Linting
+      - Deployment/build (if applicable)
+      - Tests running against real endpoints (if applicable)
+
+      If `./do check` fails due to environment issues (missing tools, SSH, etc.):
+      - Fix the environment issue first
+      - Then run `./do check` again (the FULL command)
+      - DO NOT work around by running local commands instead
+
    2. If `./do check` FAILS:
       - Capture the complete error output
       - Launch a NEW sub-agent (general-purpose) with these instructions:
@@ -62,7 +82,14 @@ c) **Verify and Fix with Sub-Agents** (CRITICAL - Orchestration pattern):
    **Important:** You are the orchestrator - delegate all error fixing to sub-agents.
 
 d) **Create Commit** (CRITICAL - Main agent only):
-   Once `./do check` passes, YOU create the commit:
+   Once `./do check` passes, YOU create the commit.
+
+   **Self-check before committing:**
+   - ✅ Did I run the literal command `./do check`?
+   - ✅ Did I see the full pipeline (not just lint)?
+   - ✅ Did exit code = 0?
+
+   If ANY answer is "no" → do NOT commit. Run `./do check` properly first.
 
    **Commit Process:**
    1. Use `git status` to see all changes (modified + untracked files)

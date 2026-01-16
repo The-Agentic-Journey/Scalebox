@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { api } from "./helpers";
+import { API_BASE_URL, TEST_PUBLIC_KEY, api } from "./helpers";
 
 describe("Firecracker API", () => {
 	// === Test Helpers & Cleanup ===
@@ -24,7 +24,7 @@ describe("Firecracker API", () => {
 
 	// === Phase 2: Health & Auth ===
 	test("health check returns ok", async () => {
-		const res = await fetch(`http://${process.env.VM_HOST || "34.40.56.57"}:8080/health`);
+		const res = await fetch(`${API_BASE_URL}/health`);
 		expect(res.status).toBe(200);
 		const data = await res.json();
 		expect(data.status).toBe("ok");
@@ -63,11 +63,65 @@ describe("Firecracker API", () => {
 	});
 
 	// === Phase 4: VM Lifecycle ===
-	test.skip("create VM returns valid response", async () => {});
-	test.skip("created VM appears in list", async () => {});
-	test.skip("get VM by id returns details", async () => {});
-	test.skip("delete VM returns 204", async () => {});
-	test.skip("deleted VM not in list", async () => {});
+	test("create VM returns valid response", async () => {
+		const { status, data } = await api.post("/vms", {
+			template: "debian-base",
+			name: "test-vm",
+			ssh_public_key: TEST_PUBLIC_KEY,
+		});
+		if (data?.id) createdVmIds.push(data.id);
+
+		expect(status).toBe(201);
+		expect(data.id).toMatch(/^vm-[a-f0-9]{12}$/);
+		expect(data.template).toBe("debian-base");
+		expect(data.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+		expect(data.ssh_port).toBeGreaterThan(22000);
+	});
+
+	test("created VM appears in list", async () => {
+		const { data: created } = await api.post("/vms", {
+			template: "debian-base",
+			ssh_public_key: TEST_PUBLIC_KEY,
+		});
+		createdVmIds.push(created.id);
+
+		const { status, data } = await api.get("/vms");
+		expect(status).toBe(200);
+		expect(data.vms.some((v: { id: string }) => v.id === created.id)).toBe(true);
+	});
+
+	test("get VM by id returns details", async () => {
+		const { data: created } = await api.post("/vms", {
+			template: "debian-base",
+			ssh_public_key: TEST_PUBLIC_KEY,
+		});
+		createdVmIds.push(created.id);
+
+		const { status, data } = await api.get(`/vms/${created.id}`);
+		expect(status).toBe(200);
+		expect(data.id).toBe(created.id);
+	});
+
+	test("delete VM returns 204", async () => {
+		const { data: created } = await api.post("/vms", {
+			template: "debian-base",
+			ssh_public_key: TEST_PUBLIC_KEY,
+		});
+
+		const { status } = await api.delete(`/vms/${created.id}`);
+		expect(status).toBe(204);
+	});
+
+	test("deleted VM not in list", async () => {
+		const { data: created } = await api.post("/vms", {
+			template: "debian-base",
+			ssh_public_key: TEST_PUBLIC_KEY,
+		});
+		await api.delete(`/vms/${created.id}`);
+
+		const { data } = await api.get("/vms");
+		expect(data.vms.some((v: { id: string }) => v.id === created.id)).toBe(false);
+	});
 
 	// === Phase 5: SSH Access ===
 	test.skip("VM becomes reachable via SSH", async () => {});

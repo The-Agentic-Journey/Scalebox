@@ -3,7 +3,7 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"lint": "biome check --apply .",
+		"lint": "biome check .",
 		"lint:check": "biome check ."
 	},
 	"dependencies": {
