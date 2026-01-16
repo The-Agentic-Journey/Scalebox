@@ -329,9 +329,13 @@ Create reusable provisioning scripts that set up any fresh Ubuntu/Debian VM for 
 ### Steps
 
 #### 1.1 Base System Setup (`provision/setup.sh`)
+
+**All provisioning scripts are idempotent** - safe to re-run without destroying existing data.
+
 ```bash
 #!/usr/bin/env bash
 # Main entry point - runs all provisioning steps
+# Idempotent: safe to re-run for updates or recovery
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -356,10 +360,14 @@ echo "==> Provisioning complete!"
 ```
 
 #### 1.2 Firecracker Installation (`provision/firecracker.sh`)
-- Download latest Firecracker release binary
+- Download Firecracker release binary (idempotent - safe to re-run for updates)
 - Install to /usr/local/bin/firecracker
 - Verify /dev/kvm exists and is accessible
 - Download compatible Linux kernel (5.10 recommended)
+
+**Note on updates:** Firecracker is not a daemon. Each VM spawns its own process.
+Updating the binary only affects *new* VMs - running VMs continue with the old binary.
+To fully migrate, delete and recreate VMs after updating.
 
 ```bash
 #!/usr/bin/env bash
@@ -371,13 +379,14 @@ if [[ ! -e /dev/kvm ]]; then
   exit 1
 fi
 
-# Download Firecracker binary
+# Download Firecracker binary (idempotent - overwrites existing)
 FC_VERSION="1.7.0"
+echo "Installing Firecracker v${FC_VERSION}..."
 curl -L -o /usr/local/bin/firecracker \
   "https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VERSION}/firecracker-v${FC_VERSION}-x86_64"
 chmod +x /usr/local/bin/firecracker
 
-# Download compatible kernel
+# Download compatible kernel (idempotent - overwrites existing)
 KERNEL_VERSION="5.10.217"
 mkdir -p /var/lib/firecracker/kernel
 curl -L -o /var/lib/firecracker/kernel/vmlinux \
@@ -403,24 +412,47 @@ ls -la /var/lib/firecracker/kernel/vmlinux
 - Create /var/lib/firecracker directory structure
 - Set up btrfs filesystem (loop device for dev, dedicated partition for prod)
 - Create subdirectories: templates/, vms/, kernel/
+- **Idempotent:** Safe to re-run, skips if already set up
 
 **For GCP (loop device approach):**
 ```bash
-# Create 50GB sparse file
-truncate -s 50G /var/lib/firecracker.img
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Format as btrfs
-mkfs.btrfs /var/lib/firecracker.img
+IMG_FILE="/var/lib/firecracker.img"
+MOUNT_POINT="/var/lib/firecracker"
 
-# Mount
-mkdir -p /var/lib/firecracker
-mount -o loop /var/lib/firecracker.img /var/lib/firecracker
+# Create and format only if image doesn't exist
+if [[ ! -f "$IMG_FILE" ]]; then
+  echo "Creating 50GB sparse file..."
+  truncate -s 50G "$IMG_FILE"
+  echo "Formatting as btrfs..."
+  mkfs.btrfs "$IMG_FILE"
+else
+  echo "Image file already exists, skipping creation"
+fi
 
-# Create subdirectories for templates, VMs, and kernel
-mkdir -p /var/lib/firecracker/{templates,vms,kernel}
+# Mount only if not already mounted
+mkdir -p "$MOUNT_POINT"
+if ! mountpoint -q "$MOUNT_POINT"; then
+  echo "Mounting btrfs filesystem..."
+  mount -o loop "$IMG_FILE" "$MOUNT_POINT"
+else
+  echo "Already mounted, skipping"
+fi
 
-# Add to fstab for persistence
-echo '/var/lib/firecracker.img /var/lib/firecracker btrfs loop,defaults 0 0' >> /etc/fstab
+# Create subdirectories (idempotent)
+mkdir -p "$MOUNT_POINT"/{templates,vms,kernel}
+
+# Add to fstab only if not already present
+if ! grep -q 'firecracker.img' /etc/fstab; then
+  echo "Adding to /etc/fstab..."
+  echo "$IMG_FILE $MOUNT_POINT btrfs loop,defaults 0 0" >> /etc/fstab
+else
+  echo "Already in /etc/fstab, skipping"
+fi
+
+echo "Storage setup complete"
 ```
 
 **Manual Verification:**
@@ -505,10 +537,29 @@ iptables -t nat -L -n | grep MASQUERADE
 - Install OpenSSH server
 - Configure for SSH key injection (empty authorized_keys, will be populated per-VM)
 - Save as debian-base template
+- **Idempotent:** Skips if debian-base.ext4 already exists
 
 ```bash
-# Create rootfs (use explicit Debian version for reproducibility)
+#!/usr/bin/env bash
+set -euo pipefail
+
+TEMPLATE_PATH="/var/lib/firecracker/templates/debian-base.ext4"
+
+# Skip if template already exists
+if [[ -f "$TEMPLATE_PATH" ]]; then
+  echo "debian-base template already exists, skipping"
+  exit 0
+fi
+
+echo "Creating debian-base template..."
+
+# Install debootstrap if needed
 apt-get install -y debootstrap
+
+# Clean up any previous failed attempt
+rm -rf /tmp/rootfs
+
+# Create rootfs (use explicit Debian version for reproducibility)
 mkdir -p /tmp/rootfs
 debootstrap --include=openssh-server,iproute2,iputils-ping bookworm /tmp/rootfs http://deb.debian.org/debian
 
@@ -545,13 +596,15 @@ rm -rf /var/lib/apt/lists/*
 EOF
 
 # Create ext4 image
-truncate -s 2G /var/lib/firecracker/templates/debian-base.ext4
-mkfs.ext4 /var/lib/firecracker/templates/debian-base.ext4
+truncate -s 2G "$TEMPLATE_PATH"
+mkfs.ext4 "$TEMPLATE_PATH"
 mkdir -p /mnt/rootfs
-mount /var/lib/firecracker/templates/debian-base.ext4 /mnt/rootfs
+mount "$TEMPLATE_PATH" /mnt/rootfs
 cp -a /tmp/rootfs/* /mnt/rootfs/
 umount /mnt/rootfs
 rm -rf /tmp/rootfs
+
+echo "debian-base template created"
 ```
 
 **Manual Verification:**
