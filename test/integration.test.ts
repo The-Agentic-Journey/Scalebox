@@ -23,7 +23,12 @@ describe("Firecracker API", () => {
 	});
 
 	// === Phase 2: Health & Auth ===
-	test.skip("health check returns ok", async () => {});
+	test("health check returns ok", async () => {
+		const res = await fetch(`http://${process.env.VM_HOST || "34.40.56.57"}:8080/health`);
+		expect(res.status).toBe(200);
+		const data = await res.json();
+		expect(data.status).toBe("ok");
+	});
 	test.skip("auth rejects missing token", async () => {});
 	test.skip("auth rejects invalid token", async () => {});
 
