@@ -1,4 +1,4 @@
-# Scalebox Refactoring Plan v4
+# Scalebox Refactoring Plan v5
 
 This plan transforms firecracker-api into **scalebox** with self-contained provisioning, systemd service management, ephemeral test VMs, and a CLI.
 
@@ -177,7 +177,7 @@ install_deps() {
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     curl wget jq iptables iproute2 btrfs-progs \
-    debootstrap qemu-utils e2fsprogs openssh-client
+    debootstrap qemu-utils e2fsprogs openssh-client openssl
 }
 
 # === Setup Storage ===
@@ -241,10 +241,15 @@ setup_network() {
     log "Setting up network..."
   fi
 
-  # Disable NetworkManager if present (conflicts with systemd-networkd)
-  if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-    log "Disabling NetworkManager..."
-    systemctl disable --now NetworkManager 2>/dev/null || true
+  # Configure NetworkManager to ignore br0 (if present) instead of disabling it
+  # This prevents disconnecting the primary interface on GCE
+  if command -v nmcli &>/dev/null; then
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/scalebox.conf <<'EOF'
+[keyfile]
+unmanaged-devices=interface-name:br0;interface-name:tap*
+EOF
+    systemctl reload NetworkManager 2>/dev/null || true
   fi
 
   # Enable IP forwarding
@@ -285,13 +290,21 @@ EOF
     ((retries--))
   done
 
-  # Setup NAT with iptables
+  # Get default interface (robust parsing)
   local default_if
-  default_if=$(ip route | awk '/default/ {print $5; exit}')
+  default_if=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
+  [[ -n "$default_if" ]] || die "Could not determine default interface"
 
-  # Remove existing rule if present (idempotent)
+  # Setup iptables rules (idempotent - remove first, then add)
+  # NAT for outbound traffic
   iptables -t nat -D POSTROUTING -s 172.16.0.0/16 -o "$default_if" -j MASQUERADE 2>/dev/null || true
   iptables -t nat -A POSTROUTING -s 172.16.0.0/16 -o "$default_if" -j MASQUERADE
+
+  # FORWARD rules (required for VM traffic to flow)
+  iptables -D FORWARD -i br0 -o "$default_if" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -i "$default_if" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+  iptables -A FORWARD -i br0 -o "$default_if" -j ACCEPT
+  iptables -A FORWARD -i "$default_if" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
   # Save iptables rules
   mkdir -p /etc/iptables
@@ -301,8 +314,7 @@ EOF
   cat > /etc/systemd/system/iptables-restore.service <<'EOF'
 [Unit]
 Description=Restore iptables rules
-Before=network-pre.target
-Wants=network-pre.target
+After=network.target
 
 [Service]
 Type=oneshot
@@ -346,8 +358,8 @@ passwd -d root
 # Configure SSH
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
-sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 
 # Generate host keys
 ssh-keygen -A
@@ -440,6 +452,20 @@ start_service() {
   die "Service failed to start. Check: journalctl -u scaleboxd"
 }
 
+# === Pre-flight Check ===
+preflight_check() {
+  log "Running pre-flight checks..."
+  local missing=()
+
+  [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
+  [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
+  [[ -f "$INSTALL_DIR/scalebox" ]] || missing+=("scalebox CLI")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    die "Missing required files in $INSTALL_DIR: ${missing[*]}"
+  fi
+}
+
 # === Main ===
 main() {
   echo ""
@@ -451,6 +477,7 @@ main() {
   check_root
   check_os
   check_kvm
+  preflight_check
 
   install_deps
   setup_storage
@@ -509,7 +536,7 @@ API_TOKEN="${SCALEBOX_TOKEN:-}"
 
 # Read token from config if not set
 if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
-  API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2 || true)
+  API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
 fi
 
 die() { echo "Error: $1" >&2; exit 1; }
@@ -650,9 +677,14 @@ rm -rf provision/
 ### Verification
 
 ```bash
-./do build
+# Note: do script is replaced in Phase 3, so verify manually:
+mkdir -p builds
+./.bun/bin/bun build src/index.ts --compile --outfile builds/scaleboxd
+cp scripts/install.sh scripts/scalebox scripts/scaleboxd.service builds/
+chmod +x builds/*
 ls -la builds/
 # Should show: scaleboxd, scalebox, scaleboxd.service, install.sh
+rm -rf builds/  # cleanup for now
 ```
 
 ---
@@ -734,7 +766,7 @@ export async function sshExec(sshPort: number, command: string): Promise<string>
 
 ### 2.2 Update `test/integration.test.ts`
 
-**All occurrences to change** (14 total):
+**All occurrences to change** (15 total):
 
 | Line | Change From | Change To |
 |------|-------------|-----------|
@@ -749,8 +781,10 @@ export async function sshExec(sshPort: number, command: string): Promise<string>
 | ~267 | `waitForSsh(vm1.ip, 30000)` | `waitForSsh(vm1.ssh_port, 30000)` |
 | ~271 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
 | ~274 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
-| ~293 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
-| ~294 | `sshExec(vm2.ip, ...)` | `sshExec(vm2.ssh_port, ...)` |
+| ~278 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
+| ~296 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
+| ~297 | `sshExec(vm2.ip, ...)` | `sshExec(vm2.ssh_port, ...)` |
+| ~315 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
 
 **Search/replace pattern:**
 - Find: `waitForSsh(data.ip,` → Replace: `waitForSsh(data.ssh_port,`
@@ -781,13 +815,34 @@ export async function sshExec(sshPort: number, command: string): Promise<string>
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 GCLOUD_ZONE="${GCLOUD_ZONE:-us-central1-a}"
 GCLOUD_PROJECT="${GCLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || echo '')}"
 VM_NAME=""
 VM_IP=""
 KEEP_VM="${KEEP_VM:-false}"
 
+# Local bun installation
+BUN_DIR="$SCRIPT_DIR/.bun"
+BUN_BIN="$BUN_DIR/bin/bun"
+
 die() { echo "Error: $1" >&2; exit 1; }
+
+ensure_bun() {
+  if [[ ! -x "$BUN_BIN" ]]; then
+    echo "==> Installing bun locally..."
+    BUN_INSTALL="$BUN_DIR" bash -c "$(curl -fsSL https://bun.sh/install)"
+  fi
+}
+
+ensure_deps() {
+  if [[ ! -d "$SCRIPT_DIR/node_modules" ]] || [[ "$SCRIPT_DIR/package.json" -nt "$SCRIPT_DIR/node_modules" ]]; then
+    echo "==> Installing dependencies..."
+    "$BUN_BIN" install
+  fi
+}
 
 cleanup() {
   if [[ -n "$VM_NAME" && "$KEEP_VM" != "true" ]]; then
@@ -842,17 +897,27 @@ wait_for_ssh() {
 }
 
 provision_vm() {
+  # Verify builds directory exists and has files
+  [[ -d builds && -n "$(ls -A builds 2>/dev/null)" ]] || die "builds/ directory is empty. Run './do build' first."
+
   echo "==> Creating target directory..."
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="sudo mkdir -p /opt/scalebox && sudo chmod 777 /opt/scalebox" \
+    --command="sudo mkdir -p /opt/scalebox && sudo chown \$(whoami) /opt/scalebox" \
     --quiet
 
   echo "==> Copying builds to VM..."
-  gcloud compute scp --recurse builds/* "$VM_NAME:/opt/scalebox/" \
+  gcloud compute scp --recurse builds/ "$VM_NAME:/opt/scalebox/" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
+    --quiet
+
+  # Move files from builds/ subdirectory to /opt/scalebox/
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="mv /opt/scalebox/builds/* /opt/scalebox/ && rmdir /opt/scalebox/builds" \
     --quiet
 
   echo "==> Running install script..."
@@ -867,13 +932,15 @@ get_api_token() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2" \
+    --command="sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2-" \
     --quiet
 }
 
 # === Commands ===
 
 do_build() {
+  ensure_bun
+
   echo "==> Building..."
 
   # Check scripts directory exists
@@ -883,7 +950,7 @@ do_build() {
   mkdir -p builds
 
   # Compile server
-  ~/.bun/bin/bun build src/index.ts --compile --outfile builds/scaleboxd
+  "$BUN_BIN" build src/index.ts --compile --outfile builds/scaleboxd
 
   # Verify binary was created
   [[ -f builds/scaleboxd ]] || die "Failed to compile scaleboxd"
@@ -900,15 +967,22 @@ do_build() {
 }
 
 do_lint() {
-  ~/.bun/bin/bun run lint
+  ensure_bun
+  ensure_deps
+  "$BUN_BIN" run lint
 }
 
 do_test() {
-  ~/.bun/bin/bun test "$@"
+  ensure_bun
+  ensure_deps
+  "$BUN_BIN" test "$@"
 }
 
 do_check() {
   trap cleanup EXIT
+
+  ensure_bun
+  ensure_deps
 
   echo "==> Linting..."
   do_lint
@@ -927,7 +1001,7 @@ do_check() {
   [[ -n "$token" ]] || die "Failed to get API token"
 
   echo "==> Running tests against $VM_IP..."
-  VM_HOST="$VM_IP" API_TOKEN="$token" ~/.bun/bin/bun test
+  VM_HOST="$VM_IP" API_TOKEN="$token" "$BUN_BIN" test
 
   echo ""
   echo "==> All tests passed!"
@@ -1060,7 +1134,7 @@ Phase 4: CLI Verification ──────────────────
 - `src/config.ts` - paths to /var/lib/scalebox
 - `src/index.ts` - startup message
 - `test/helpers.ts` - proxy ports, remove SSH_HOST
-- `test/integration.test.ts` - ssh_port instead of ip (14 changes)
+- `test/integration.test.ts` - ssh_port instead of ip (15 changes)
 - `do` - complete rewrite
 - `.gitignore` - add builds/
 
@@ -1075,10 +1149,15 @@ Phase 4: CLI Verification ──────────────────
 |------|------------|
 | GCE quota | Use dedicated project |
 | No nested virt | n2-standard-2 in us-central1-a |
-| Install fails midway | Cleanup trap for temp dirs |
-| Token extraction fails | Explicit error before tests |
+| Install fails midway | Cleanup trap for temp dirs + pre-flight check |
+| Token extraction fails | Explicit error before tests, `cut -d= -f2-` handles tokens with `=` |
 | Firewall blocks | Phase 0 creates rule |
 | VM not deleted | trap EXIT + unique name with PID+RANDOM |
-| Network conflicts | Disable NetworkManager, use systemd-networkd only |
-| iptables not restored | systemd service instead of ifupdown hooks |
+| Network conflicts | Configure NetworkManager to ignore br0/tap* (not disable) |
+| iptables not restored | systemd service after network.target |
 | Bridge not persistent | systemd-networkd manages bridge |
+| VMs can't reach internet | FORWARD iptables rules for br0 traffic |
+| Missing dependencies | ensure_bun/ensure_deps before lint/test |
+| scp glob fails | Check builds/ exists first, use `builds/` not `builds/*` |
+| Binary missing discovered late | Pre-flight check at start of install |
+| chmod 777 security | Use chown instead of world-writable |
