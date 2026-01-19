@@ -5,13 +5,13 @@ import { $ } from "bun";
 const FIXTURES_DIR = join(import.meta.dir, "fixtures");
 
 // API configuration - VM_HOST can be localhost (via SSH tunnel) or remote VM IP
-export const VM_HOST = process.env.VM_HOST || "34.40.56.57";
+export const VM_HOST = process.env.VM_HOST || "34.89.142.221";
 export const API_PORT = process.env.API_PORT || "8080";
 export const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
 const API_TOKEN = process.env.API_TOKEN || "dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800";
 
 // SSH configuration - SSH_HOST must be the actual remote VM (not tunneled)
-export const SSH_HOST = process.env.SSH_HOST || "34.40.56.57";
+export const SSH_HOST = process.env.SSH_HOST || "34.89.142.221";
 
 // API client
 export const api = {

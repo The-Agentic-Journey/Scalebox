@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VM_HOST="${VM_HOST:-34.40.56.57}"
+VM_HOST="${VM_HOST:-34.89.142.221}"
 VM_USER="${VM_USER:-dev}"
 REMOTE_DIR="/home/${VM_USER}/firecracker-api"
 
