@@ -12,6 +12,7 @@ set -euo pipefail
 DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
 API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
+DOMAIN="${DOMAIN:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/scalebox}"
 
 FC_VERSION="1.10.1"
@@ -263,6 +264,45 @@ CHROOT
   log "Base template created: $template_path"
 }
 
+# === Install Caddy (HTTPS reverse proxy) ===
+install_caddy() {
+  [[ -n "$DOMAIN" ]] || return 0
+
+  log "Installing Caddy..."
+  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/caddy.gpg
+  echo "deb [signed-by=/usr/share/keyrings/caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" > /etc/apt/sources.list.d/caddy.list
+  apt-get update -qq
+  apt-get install -y -qq caddy
+
+  log "Configuring Caddy for $DOMAIN..."
+  cat > /etc/caddy/Caddyfile <<EOF
+$DOMAIN {
+  reverse_proxy localhost:$API_PORT
+}
+EOF
+
+  systemctl enable caddy
+  systemctl restart caddy
+}
+
+# === Wait for HTTPS Certificate ===
+wait_for_https() {
+  [[ -n "$DOMAIN" ]] || return 0
+
+  log "Waiting for HTTPS certificate..."
+  local retries=60
+  while [[ $retries -gt 0 ]]; do
+    if curl -sf "https://$DOMAIN/health" &>/dev/null; then
+      log "HTTPS is ready"
+      return 0
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  die "Failed to obtain TLS certificate for $DOMAIN"
+}
+
 # === Install Scalebox Binary ===
 install_binary() {
   log "Installing scaleboxd..."
@@ -374,11 +414,17 @@ main() {
   install_cli
   install_service
   start_service
+  install_caddy
+  wait_for_https
 
   echo ""
   log "Installation complete!"
   echo ""
-  echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
+  if [[ -n "$DOMAIN" ]]; then
+    echo "  API: https://$DOMAIN"
+  else
+    echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
+  fi
   echo "  Token: $API_TOKEN"
   echo ""
   echo "  Commands:"

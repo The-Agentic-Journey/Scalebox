@@ -7,7 +7,8 @@ const FIXTURES_DIR = join(import.meta.dir, "fixtures");
 // Configuration
 export const VM_HOST = process.env.VM_HOST || "localhost";
 export const API_PORT = process.env.API_PORT || "8080";
-export const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
+export const USE_HTTPS = process.env.USE_HTTPS === "true";
+export const API_BASE_URL = USE_HTTPS ? `https://${VM_HOST}` : `http://${VM_HOST}:${API_PORT}`;
 const API_TOKEN = process.env.API_TOKEN || "dev-token";
 
 // SSH

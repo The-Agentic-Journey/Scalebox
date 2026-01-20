@@ -9,6 +9,8 @@ GCLOUD_PROJECT="${GCLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null 
 VM_NAME=""
 VM_IP=""
 KEEP_VM="${KEEP_VM:-false}"
+DNS_ZONE="${DNS_ZONE:-scalebox-dns}"
+DNS_SUFFIX="${DNS_SUFFIX:-testing.holderbaum.cloud}"
 
 # Local bun installation
 BUN_DIR="$SCRIPT_DIR/.bun"
@@ -31,6 +33,7 @@ ensure_deps() {
 }
 
 cleanup() {
+  delete_dns_record
   if [[ -n "$VM_NAME" && "$KEEP_VM" != "true" ]]; then
     echo "==> Deleting VM: $VM_NAME"
     gcloud compute instances delete "$VM_NAME" \
@@ -111,7 +114,7 @@ provision_vm() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="sudo bash /opt/scalebox/install.sh" \
+    --command="sudo DOMAIN='$DOMAIN' bash /opt/scalebox/install.sh" \
     --quiet
 }
 
@@ -121,6 +124,41 @@ get_api_token() {
     --project="$GCLOUD_PROJECT" \
     --command="sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2-" \
     --quiet
+}
+
+create_dns_record() {
+  VM_FQDN="${VM_NAME}.${DNS_SUFFIX}"
+  echo "==> Creating DNS record: ${VM_FQDN} -> ${VM_IP}"
+
+  gcloud dns record-sets create "${VM_FQDN}." \
+    --zone="$DNS_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --type=A \
+    --ttl=60 \
+    --rrdatas="$VM_IP"
+
+  echo "==> Waiting for DNS propagation..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if host "$VM_FQDN" 2>/dev/null | grep -q "$VM_IP"; then
+      echo "==> DNS propagated"
+      return 0
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  die "DNS propagation timeout for $VM_FQDN"
+}
+
+delete_dns_record() {
+  if [[ -n "$VM_NAME" && -n "$DNS_SUFFIX" ]]; then
+    echo "==> Deleting DNS record: ${VM_NAME}.${DNS_SUFFIX}"
+    gcloud dns record-sets delete "${VM_NAME}.${DNS_SUFFIX}." \
+      --zone="$DNS_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --type=A \
+      --quiet 2>/dev/null || true
+  fi
 }
 
 # === Commands ===
@@ -192,15 +230,17 @@ do_check() {
   echo "==> Creating test VM..."
   create_vm
   wait_for_ssh
-  provision_vm
+  create_dns_record
+  echo "==> Provisioning VM..."
+  DOMAIN="$VM_FQDN" provision_vm
 
   echo "==> Getting API token..."
   local token
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
 
-  echo "==> Running tests against $VM_IP..."
-  VM_HOST="$VM_IP" API_TOKEN="$token" "$BUN_BIN" test
+  echo "==> Running tests against https://$VM_FQDN..."
+  VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
 
   echo ""
   echo "==> All tests passed!"
