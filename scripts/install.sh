@@ -13,6 +13,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
 API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
 DOMAIN="${DOMAIN:-}"
+BASE_DOMAIN="${BASE_DOMAIN:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/scalebox}"
 
 FC_VERSION="1.10.1"
@@ -273,7 +274,7 @@ CHROOT
 
 # === Install Caddy (HTTPS reverse proxy) ===
 install_caddy() {
-  [[ -n "$DOMAIN" ]] || return 0
+  [[ -n "$DOMAIN" || -n "$BASE_DOMAIN" ]] || return 0
 
   log "Installing Caddy..."
   apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
@@ -282,12 +283,42 @@ install_caddy() {
   apt-get update -qq
   apt-get install -y -qq caddy
 
-  log "Configuring Caddy for $DOMAIN..."
-  cat > /etc/caddy/Caddyfile <<EOF
+  # Start Caddyfile
+  cat > /etc/caddy/Caddyfile <<'CADDYEOF'
+{
+    on_demand_tls {
+        ask http://localhost:8080/caddy/check
+    }
+}
+CADDYEOF
+
+  # Add main API domain if set
+  if [[ -n "$DOMAIN" ]]; then
+      log "Configuring Caddy for $DOMAIN..."
+      cat >> /etc/caddy/Caddyfile <<EOF
+
 $DOMAIN {
-  reverse_proxy localhost:$API_PORT
+    reverse_proxy localhost:$API_PORT
 }
 EOF
+  fi
+
+  # Add wildcard for VM subdomains if BASE_DOMAIN is set
+  if [[ -n "$BASE_DOMAIN" ]]; then
+      log "Configuring Caddy for VM subdomains on $BASE_DOMAIN..."
+      cat >> /etc/caddy/Caddyfile <<EOF
+
+*.$BASE_DOMAIN {
+    tls {
+        on_demand
+    }
+
+    handle {
+        respond "VM not found" 404
+    }
+}
+EOF
+  fi
 
   systemctl enable caddy
   systemctl restart caddy
@@ -352,6 +383,7 @@ API_PORT=$API_PORT
 API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
+BASE_DOMAIN=$BASE_DOMAIN
 EOF
   )
 
@@ -433,6 +465,9 @@ main() {
     echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
   fi
   echo "  Token: $API_TOKEN"
+  if [[ -n "$BASE_DOMAIN" ]]; then
+      echo "  VM URLs: https://{vm-name}.$BASE_DOMAIN"
+  fi
   echo ""
   echo "  Commands:"
   echo "    systemctl status scaleboxd"
