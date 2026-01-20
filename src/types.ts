@@ -13,11 +13,12 @@ export interface VM {
 
 export interface VMResponse {
 	id: string;
-	name: string | null;
+	name: string;
 	template: string;
 	ip: string;
 	ssh_port: number;
 	ssh: string;
+	url: string | null;
 	status: "running" | "stopped";
 	created_at: string;
 }
