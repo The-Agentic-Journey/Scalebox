@@ -8,4 +8,7 @@ export const config = {
 	defaultVcpuCount: Number(process.env.DEFAULT_VCPU_COUNT) || 2,
 	defaultMemSizeMib: Number(process.env.DEFAULT_MEM_SIZE_MIB) || 512,
 	protectedTemplates: ["debian-base"],
+	// Domain suffix for VM subdomains (e.g., "vms.example.com")
+	// When set, VMs will be accessible at https://{vm-name}.{baseDomain}
+	baseDomain: process.env.BASE_DOMAIN || "",
 };
