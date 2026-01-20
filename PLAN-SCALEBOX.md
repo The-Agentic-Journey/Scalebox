@@ -1,4 +1,4 @@
-# Scalebox Refactoring Plan v5
+# Scalebox Refactoring Plan v6
 
 This plan transforms firecracker-api into **scalebox** with self-contained provisioning, systemd service management, ephemeral test VMs, and a CLI.
 
@@ -111,10 +111,12 @@ export const config = {
 
 ### 1.3 Update `src/index.ts`
 
-Change startup message:
+Change startup message (add before the `export default` line):
 
 ```typescript
+const host = "0.0.0.0";
 console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
+export default { port: config.apiPort, hostname: host, fetch: app.fetch };
 ```
 
 ### 1.4 Create `scripts/` directory
@@ -169,6 +171,7 @@ check_os() {
 
 check_kvm() {
   [[ -e /dev/kvm ]] || die "/dev/kvm not found. Enable nested virtualization."
+  [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm not accessible. Check permissions."
 }
 
 # === Install System Dependencies ===
@@ -249,7 +252,7 @@ setup_network() {
 [keyfile]
 unmanaged-devices=interface-name:br0;interface-name:tap*
 EOF
-    systemctl reload NetworkManager 2>/dev/null || true
+    systemctl reload NetworkManager 2>/dev/null && sleep 1 || true
   fi
 
   # Enable IP forwarding
@@ -318,7 +321,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+ExecStart=/usr/sbin/iptables-restore /etc/iptables/rules.v4
 RemainAfterExit=yes
 
 [Install]
@@ -412,16 +415,20 @@ install_service() {
 
   mkdir -p /etc/scalebox
 
-  # Generate token if not provided
+  # Preserve existing token on reinstall, or generate new one
+  if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
+    API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+  fi
   [[ -z "$API_TOKEN" ]] && API_TOKEN="sb-$(openssl rand -hex 24)"
 
-  # Write config
+  # Write config with restricted permissions (token is sensitive)
   cat > /etc/scalebox/config <<EOF
 API_PORT=$API_PORT
 API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
 EOF
+  chmod 600 /etc/scalebox/config
 
   # Copy service file
   if [[ -f "$INSTALL_DIR/scaleboxd.service" ]]; then
@@ -437,7 +444,8 @@ EOF
 # === Start Service ===
 start_service() {
   log "Starting scaleboxd..."
-  systemctl start scaleboxd
+  # Use restart to handle upgrades (start is no-op if already running)
+  systemctl restart scaleboxd
 
   # Wait for health check
   local retries=15
@@ -940,6 +948,7 @@ get_api_token() {
 
 do_build() {
   ensure_bun
+  ensure_deps
 
   echo "==> Building..."
 
@@ -1153,11 +1162,15 @@ Phase 4: CLI Verification ──────────────────
 | Token extraction fails | Explicit error before tests, `cut -d= -f2-` handles tokens with `=` |
 | Firewall blocks | Phase 0 creates rule |
 | VM not deleted | trap EXIT + unique name with PID+RANDOM |
-| Network conflicts | Configure NetworkManager to ignore br0/tap* (not disable) |
-| iptables not restored | systemd service after network.target |
+| Network conflicts | Configure NetworkManager to ignore br0/tap* (not disable) + sleep after reload |
+| iptables not restored | systemd service after network.target, uses /usr/sbin path |
 | Bridge not persistent | systemd-networkd manages bridge |
 | VMs can't reach internet | FORWARD iptables rules for br0 traffic |
-| Missing dependencies | ensure_bun/ensure_deps before lint/test |
+| Missing dependencies | ensure_bun/ensure_deps before lint/test/build |
 | scp glob fails | Check builds/ exists first, use `builds/` not `builds/*` |
 | Binary missing discovered late | Pre-flight check at start of install |
 | chmod 777 security | Use chown instead of world-writable |
+| Token regen on reinstall | Preserve existing token from config if present |
+| Service not restarted on upgrade | Use `systemctl restart` instead of `start` |
+| /dev/kvm permissions | Check read+write access, not just existence |
+| Config file permissions | chmod 600 on /etc/scalebox/config (token is sensitive) |
