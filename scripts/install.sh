@@ -164,9 +164,16 @@ EOF
     ((retries--)) || true
   done
 
-  # Get default interface (robust parsing)
-  local default_if
-  default_if=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
+  # Get default interface (with retry for cloud-init timing)
+  local default_if=""
+  local if_retries=30
+  while [[ $if_retries -gt 0 && -z "$default_if" ]]; do
+    default_if=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
+    if [[ -z "$default_if" ]]; then
+      sleep 1
+      ((if_retries--)) || true
+    fi
+  done
   [[ -n "$default_if" ]] || die "Could not determine default interface"
 
   # Setup iptables rules (idempotent - remove first, then add)
