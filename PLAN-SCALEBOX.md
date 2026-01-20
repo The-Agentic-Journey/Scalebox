@@ -1,4 +1,4 @@
-# Scalebox Refactoring Plan v6
+# Scalebox Refactoring Plan v7
 
 This plan transforms firecracker-api into **scalebox** with self-contained provisioning, systemd service management, ephemeral test VMs, and a CLI.
 
@@ -203,7 +203,7 @@ setup_storage() {
   mount -o loop "$img_path" "$DATA_DIR"
 
   if ! grep -q "$img_path" /etc/fstab; then
-    echo "$img_path $DATA_DIR btrfs loop 0 0" >> /etc/fstab
+    echo "$img_path $DATA_DIR btrfs loop,nofail 0 0" >> /etc/fstab
   fi
 
   mkdir -p "$DATA_DIR/templates" "$DATA_DIR/vms" "$DATA_DIR/kernel"
@@ -290,7 +290,7 @@ EOF
       break
     fi
     sleep 1
-    ((retries--))
+    ((retries--)) || true
   done
 
   # Get default interface (robust parsing)
@@ -317,7 +317,8 @@ EOF
   cat > /etc/systemd/system/iptables-restore.service <<'EOF'
 [Unit]
 Description=Restore iptables rules
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -373,13 +374,17 @@ systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
 CHROOT
 
-  # Create ext4 image
-  truncate -s 2G "$template_path"
-  mkfs.ext4 -F "$template_path" >/dev/null
+  # Create ext4 image (use .tmp for atomic creation)
+  local tmp_path="${template_path}.tmp"
+  truncate -s 2G "$tmp_path"
+  mkfs.ext4 -F "$tmp_path" >/dev/null
 
-  mount -o loop "$template_path" "$mount_dir"
+  mount -o loop "$tmp_path" "$mount_dir"
   cp -a "$rootfs_dir"/* "$mount_dir"/
   umount "$mount_dir"
+
+  # Atomic rename to final path
+  mv "$tmp_path" "$template_path"
 
   # Cleanup
   rm -rf "$rootfs_dir" "$mount_dir"
@@ -455,7 +460,7 @@ start_service() {
       return 0
     fi
     sleep 1
-    ((retries--))
+    ((retries--)) || true
   done
   die "Service failed to start. Check: journalctl -u scaleboxd"
 }
@@ -520,7 +525,8 @@ main "$@"
 ```ini
 [Unit]
 Description=Scalebox VM Management API
-After=network.target
+After=network.target systemd-networkd.service
+Wants=systemd-networkd.service
 
 [Service]
 Type=simple
@@ -548,6 +554,7 @@ if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
 fi
 
 die() { echo "Error: $1" >&2; exit 1; }
+command -v jq &>/dev/null || die "jq is required. Install with: apt install jq"
 need_token() { [[ -n "$API_TOKEN" ]] || die "SCALEBOX_TOKEN not set"; }
 
 api() {
@@ -758,7 +765,7 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
+      await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
       return;
     } catch {
       await Bun.sleep(1000);
@@ -768,7 +775,7 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
 }
 
 export async function sshExec(sshPort: number, command: string): Promise<string> {
-  return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
+  return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
 }
 ```
 
@@ -884,6 +891,8 @@ create_vm() {
     --project="$GCLOUD_PROJECT" \
     --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
 
+  [[ -n "$VM_IP" ]] || die "VM has no external IP. Check GCE configuration."
+
   echo "==> VM IP: $VM_IP"
 }
 
@@ -899,7 +908,7 @@ wait_for_ssh() {
       return 0
     fi
     sleep 5
-    ((retries--))
+    ((retries--)) || true
   done
   die "SSH not ready after 150s"
 }
@@ -1174,3 +1183,11 @@ Phase 4: CLI Verification ──────────────────
 | Service not restarted on upgrade | Use `systemctl restart` instead of `start` |
 | /dev/kvm permissions | Check read+write access, not just existence |
 | Config file permissions | chmod 600 on /etc/scalebox/config (token is sensitive) |
+| `((retries--))` with set -e | Add `\|\| true` to prevent premature script exit when result is 0 |
+| CLI requires jq | Check at startup with helpful error message |
+| Service starts before network ready | Add After/Wants for systemd-networkd.service |
+| Btrfs mount fails on reboot | Add `nofail` option to fstab entry |
+| iptables-restore too early | Use network-online.target instead of network.target |
+| Template creation interrupted | Atomic creation with .tmp suffix + rename on success |
+| VM has no external IP | Validate VM_IP after GCE creation |
+| SSH warnings in test output | Add LogLevel=ERROR to suppress connection messages |
