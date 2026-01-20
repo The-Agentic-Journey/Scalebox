@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
+import { updateCaddyConfig } from "./services/caddy";
 import { deleteTemplate, listTemplates } from "./services/template";
 import {
 	createVm,
@@ -15,6 +16,25 @@ const app = new Hono();
 
 // Health check (no auth required)
 app.get("/health", (c) => c.json({ status: "ok" }));
+
+// Caddy on-demand TLS validation (no auth required)
+app.get("/caddy/check", (c) => {
+	const domain = c.req.query("domain");
+	if (!domain || !config.baseDomain) {
+		return c.body(null, 404);
+	}
+
+	// Extract VM name from subdomain (e.g., "very-silly-penguin" from "very-silly-penguin.vms.example.com")
+	const suffix = `.${config.baseDomain}`;
+	if (!domain.endsWith(suffix)) {
+		return c.body(null, 404);
+	}
+
+	const vmName = domain.slice(0, -suffix.length);
+	const vmExists = Array.from(vms.values()).some((vm) => vm.name === vmName);
+
+	return vmExists ? c.body(null, 200) : c.body(null, 404);
+});
 
 // Protected routes require bearer token
 app.use("/*", bearerAuth({ token: config.apiToken }));
@@ -52,6 +72,7 @@ app.post("/vms", async (c) => {
 		return await withVmCreationLock(async () => {
 			const body = await c.req.json();
 			const vm = await createVm(body);
+			await updateCaddyConfig();
 			return c.json(vmToResponse(vm), 201);
 		});
 	} catch (e: unknown) {
@@ -66,6 +87,7 @@ app.delete("/vms/:id", async (c) => {
 	const vm = vms.get(c.req.param("id"));
 	if (!vm) return c.json({ error: "VM not found" }, 404);
 	await deleteVm(vm);
+	await updateCaddyConfig();
 	return c.body(null, 204);
 });
 
