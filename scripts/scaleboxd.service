@@ -1,0 +1,14 @@
+[Unit]
+Description=Scalebox VM Management API
+After=network.target systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/scaleboxd
+EnvironmentFile=/etc/scalebox/config
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

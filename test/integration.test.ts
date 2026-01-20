@@ -133,7 +133,7 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ip, 30000);
+			await waitForSsh(data.ssh_port, 30000);
 		},
 		{ timeout: 60000 },
 	);
@@ -147,8 +147,8 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ip, 30000);
-			const output = await sshExec(data.ip, "echo hello");
+			await waitForSsh(data.ssh_port, 30000);
+			const output = await sshExec(data.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
 		{ timeout: 60000 },
@@ -166,7 +166,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ip, 30000);
+			await waitForSsh(vm.ssh_port, 30000);
 
 			// Create a snapshot
 			const templateName = `snapshot-test-${Date.now()}`;
@@ -196,7 +196,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ip, 30000);
+			await waitForSsh(vm.ssh_port, 30000);
 
 			// Create a snapshot
 			const templateName = `snapshot-list-${Date.now()}`;
@@ -225,7 +225,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ip, 30000);
+			await waitForSsh(vm1.ssh_port, 30000);
 
 			// Create a snapshot
 			const templateName = `snapshot-create-${Date.now()}`;
@@ -246,8 +246,8 @@ describe("Firecracker API", () => {
 			expect(vm2.template).toBe(templateName);
 
 			// Verify new VM is reachable
-			await waitForSsh(vm2.ip, 30000);
-			const output = await sshExec(vm2.ip, "echo hello");
+			await waitForSsh(vm2.ssh_port, 30000);
+			const output = await sshExec(vm2.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
 		{ timeout: 180000 },
@@ -264,18 +264,18 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ip, 30000);
+			await waitForSsh(vm1.ssh_port, 30000);
 
 			// Write a unique file to the VM
 			const testContent = `test-content-${Date.now()}`;
-			await sshExec(vm1.ip, `echo "${testContent}" > /root/testfile.txt`);
+			await sshExec(vm1.ssh_port, `echo "${testContent}" > /root/testfile.txt`);
 
 			// Verify the file was written
-			const verifyContent = await sshExec(vm1.ip, "cat /root/testfile.txt");
+			const verifyContent = await sshExec(vm1.ssh_port, "cat /root/testfile.txt");
 			expect(verifyContent.trim()).toBe(testContent);
 
 			// Sync filesystem to ensure data is written to disk before snapshot
-			await sshExec(vm1.ip, "sync");
+			await sshExec(vm1.ssh_port, "sync");
 
 			// Create a snapshot
 			const templateName = `snapshot-state-${Date.now()}`;
@@ -293,8 +293,8 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm2.id);
 
 			// Verify new VM has the file with the content
-			await waitForSsh(vm2.ip, 30000);
-			const content = await sshExec(vm2.ip, "cat /root/testfile.txt");
+			await waitForSsh(vm2.ssh_port, 30000);
+			const content = await sshExec(vm2.ssh_port, "cat /root/testfile.txt");
 			expect(content.trim()).toBe(testContent);
 		},
 		{ timeout: 180000 },
@@ -312,7 +312,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready via SSH
-			await waitForSsh(vm.ip, 30000);
+			await waitForSsh(vm.ssh_port, 30000);
 
 			// Take a snapshot with a unique name
 			const templateName = `snapshot-delete-${Date.now()}`;

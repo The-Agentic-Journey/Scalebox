@@ -1,0 +1,393 @@
+#!/bin/bash
+#
+# Scalebox Installer
+#
+# Usage:
+#   Local:  sudo bash /opt/scalebox/install.sh
+#   Remote: curl -sSL https://example.com/install.sh | sudo bash
+#
+set -euo pipefail
+
+# === Configuration ===
+DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
+API_PORT="${API_PORT:-8080}"
+API_TOKEN="${API_TOKEN:-}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/scalebox}"
+
+FC_VERSION="1.10.1"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+
+# === Helpers ===
+log() { echo "[scalebox] $1"; }
+die() { echo "[scalebox] ERROR: $1" >&2; exit 1; }
+
+# === Cleanup trap for failed installs ===
+TEMP_DIRS=()
+cleanup_temps() {
+  for dir in "${TEMP_DIRS[@]}"; do
+    rm -rf "$dir" 2>/dev/null || true
+  done
+}
+trap cleanup_temps EXIT
+
+# === Checks ===
+check_root() {
+  [[ $EUID -eq 0 ]] || die "Must run as root"
+}
+
+check_os() {
+  [[ -f /etc/debian_version ]] || die "Only Debian/Ubuntu supported"
+}
+
+check_kvm() {
+  [[ -e /dev/kvm ]] || die "/dev/kvm not found. Enable nested virtualization."
+  [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm not accessible. Check permissions."
+}
+
+# === Install System Dependencies ===
+install_deps() {
+  log "Installing system dependencies..."
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    curl wget jq iptables iproute2 btrfs-progs \
+    debootstrap qemu-utils e2fsprogs openssh-client openssl
+}
+
+# === Setup Storage ===
+setup_storage() {
+  local img_path="/var/lib/scalebox.img"
+
+  if mountpoint -q "$DATA_DIR" 2>/dev/null; then
+    log "Storage already mounted at $DATA_DIR"
+    return
+  fi
+
+  log "Setting up btrfs storage..."
+  mkdir -p "$DATA_DIR"
+
+  if [[ ! -f "$img_path" ]]; then
+    truncate -s 50G "$img_path"
+    mkfs.btrfs "$img_path"
+  fi
+
+  mount -o loop "$img_path" "$DATA_DIR"
+
+  if ! grep -q "$img_path" /etc/fstab; then
+    echo "$img_path $DATA_DIR btrfs loop,nofail 0 0" >> /etc/fstab
+  fi
+
+  mkdir -p "$DATA_DIR/templates" "$DATA_DIR/vms" "$DATA_DIR/kernel"
+}
+
+# === Install Firecracker ===
+install_firecracker() {
+  local fc_bin="/usr/local/bin/firecracker"
+  local kernel_path="$DATA_DIR/kernel/vmlinux"
+  local arch
+  arch=$(uname -m)
+
+  if [[ -f "$fc_bin" ]]; then
+    log "Firecracker already installed"
+  else
+    log "Installing Firecracker v${FC_VERSION}..."
+    wget -q "https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VERSION}/firecracker-v${FC_VERSION}-${arch}.tgz" -O /tmp/fc.tgz
+    tar -xzf /tmp/fc.tgz -C /tmp
+    mv "/tmp/release-v${FC_VERSION}-${arch}/firecracker-v${FC_VERSION}-${arch}" "$fc_bin"
+    chmod +x "$fc_bin"
+    rm -rf /tmp/fc.tgz /tmp/release-*
+  fi
+
+  if [[ ! -f "$kernel_path" ]]; then
+    log "Downloading kernel..."
+    wget -q "$KERNEL_URL" -O "$kernel_path"
+  fi
+}
+
+# === Setup Network (systemd-networkd) ===
+setup_network() {
+  local bridge="br0"
+
+  # Check if bridge already exists and is configured
+  if ip link show "$bridge" &>/dev/null; then
+    log "Bridge $bridge already exists"
+  else
+    log "Setting up network..."
+  fi
+
+  # Configure NetworkManager to ignore br0 (if present) instead of disabling it
+  # This prevents disconnecting the primary interface on GCE
+  if command -v nmcli &>/dev/null; then
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/scalebox.conf <<'EOF'
+[keyfile]
+unmanaged-devices=interface-name:br0;interface-name:tap*
+EOF
+    systemctl reload NetworkManager 2>/dev/null && sleep 3 || true
+  fi
+
+  # Enable IP forwarding
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  cat > /etc/sysctl.d/99-scalebox.conf <<'EOF'
+net.ipv4.ip_forward=1
+EOF
+
+  # Configure bridge via systemd-networkd (persistent across reboots)
+  mkdir -p /etc/systemd/network
+
+  cat > /etc/systemd/network/10-br0.netdev <<'EOF'
+[NetDev]
+Name=br0
+Kind=bridge
+EOF
+
+  cat > /etc/systemd/network/20-br0.network <<'EOF'
+[Match]
+Name=br0
+
+[Network]
+Address=172.16.0.1/16
+ConfigureWithoutCarrier=yes
+EOF
+
+  # Enable and start systemd-networkd
+  systemctl enable systemd-networkd
+  systemctl restart systemd-networkd
+
+  # Wait for bridge to come up
+  local retries=10
+  while [[ $retries -gt 0 ]]; do
+    if ip link show "$bridge" &>/dev/null; then
+      break
+    fi
+    sleep 1
+    ((retries--)) || true
+  done
+
+  # Get default interface (robust parsing)
+  local default_if
+  default_if=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
+  [[ -n "$default_if" ]] || die "Could not determine default interface"
+
+  # Setup iptables rules (idempotent - remove first, then add)
+  # NAT for outbound traffic
+  iptables -t nat -D POSTROUTING -s 172.16.0.0/16 -o "$default_if" -j MASQUERADE 2>/dev/null || true
+  iptables -t nat -A POSTROUTING -s 172.16.0.0/16 -o "$default_if" -j MASQUERADE
+
+  # FORWARD rules (required for VM traffic to flow)
+  iptables -D FORWARD -i br0 -o "$default_if" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -i "$default_if" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+  iptables -A FORWARD -i br0 -o "$default_if" -j ACCEPT
+  iptables -A FORWARD -i "$default_if" -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+  # Save iptables rules
+  mkdir -p /etc/iptables
+  iptables-save > /etc/iptables/rules.v4
+
+  # Create systemd service to restore iptables on boot
+  cat > /etc/systemd/system/iptables-restore.service <<'EOF'
+[Unit]
+Description=Restore iptables rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable iptables-restore
+}
+
+# === Create Base Template ===
+create_rootfs() {
+  local template_path="$DATA_DIR/templates/debian-base.ext4"
+
+  if [[ -f "$template_path" ]]; then
+    log "Base template already exists"
+    return
+  fi
+
+  log "Creating Debian base template (this takes a few minutes)..."
+
+  local rootfs_dir="/tmp/rootfs-$$"
+  local mount_dir="/tmp/mount-$$"
+  TEMP_DIRS+=("$rootfs_dir" "$mount_dir")
+
+  mkdir -p "$rootfs_dir" "$mount_dir"
+
+  # Debootstrap minimal Debian
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged \
+    bookworm "$rootfs_dir" http://deb.debian.org/debian
+
+  # Configure the rootfs
+  chroot "$rootfs_dir" /bin/bash <<'CHROOT'
+# Disable root password (key-only auth)
+passwd -d root
+
+# Configure SSH
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+# Generate host keys
+ssh-keygen -A
+
+# Enable services
+systemctl enable ssh.service
+systemctl enable haveged.service
+systemctl enable serial-getty@ttyS0.service
+CHROOT
+
+  # Create ext4 image (use .tmp for atomic creation)
+  local tmp_path="${template_path}.tmp"
+  truncate -s 2G "$tmp_path"
+  mkfs.ext4 -F "$tmp_path" >/dev/null
+
+  mount -o loop "$tmp_path" "$mount_dir"
+  cp -a "$rootfs_dir"/* "$mount_dir"/
+  umount "$mount_dir"
+
+  # Atomic rename to final path
+  mv "$tmp_path" "$template_path"
+
+  # Cleanup
+  rm -rf "$rootfs_dir" "$mount_dir"
+  TEMP_DIRS=()
+
+  log "Base template created: $template_path"
+}
+
+# === Install Scalebox Binary ===
+install_binary() {
+  log "Installing scaleboxd..."
+
+  if [[ -f "$INSTALL_DIR/scaleboxd" ]]; then
+    cp "$INSTALL_DIR/scaleboxd" /usr/local/bin/scaleboxd
+    chmod +x /usr/local/bin/scaleboxd
+  else
+    die "scaleboxd binary not found at $INSTALL_DIR/scaleboxd"
+  fi
+}
+
+# === Install CLI ===
+install_cli() {
+  if [[ -f "$INSTALL_DIR/scalebox" ]]; then
+    log "Installing scalebox CLI..."
+    cp "$INSTALL_DIR/scalebox" /usr/local/bin/scalebox
+    chmod +x /usr/local/bin/scalebox
+  fi
+}
+
+# === Install Systemd Service ===
+install_service() {
+  log "Installing systemd service..."
+
+  mkdir -p /etc/scalebox
+
+  # Preserve existing token on reinstall, or generate new one
+  if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
+    API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+  fi
+  [[ -z "$API_TOKEN" ]] && API_TOKEN="sb-$(openssl rand -hex 24)"
+
+  # Write config with restricted permissions (token is sensitive)
+  # Use umask to prevent brief window where file is world-readable
+  (
+    umask 077
+    cat > /etc/scalebox/config <<EOF
+API_PORT=$API_PORT
+API_TOKEN=$API_TOKEN
+DATA_DIR=$DATA_DIR
+KERNEL_PATH=$DATA_DIR/kernel/vmlinux
+EOF
+  )
+
+  # Copy service file
+  if [[ -f "$INSTALL_DIR/scaleboxd.service" ]]; then
+    cp "$INSTALL_DIR/scaleboxd.service" /etc/systemd/system/
+  else
+    die "scaleboxd.service not found at $INSTALL_DIR/"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable scaleboxd
+}
+
+# === Start Service ===
+start_service() {
+  log "Starting scaleboxd..."
+  # Use restart to handle upgrades (start is no-op if already running)
+  systemctl restart scaleboxd
+
+  # Wait for health check
+  local retries=15
+  while [[ $retries -gt 0 ]]; do
+    if curl -sf "http://localhost:$API_PORT/health" &>/dev/null; then
+      log "Service is running"
+      return 0
+    fi
+    sleep 1
+    ((retries--)) || true
+  done
+  die "Service failed to start. Check: journalctl -u scaleboxd"
+}
+
+# === Pre-flight Check ===
+preflight_check() {
+  log "Running pre-flight checks..."
+  local missing=()
+
+  [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
+  [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
+  [[ -f "$INSTALL_DIR/scalebox" ]] || missing+=("scalebox CLI")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    die "Missing required files in $INSTALL_DIR: ${missing[*]}"
+  fi
+}
+
+# === Main ===
+main() {
+  echo ""
+  echo "  ╔═══════════════════════════════════════╗"
+  echo "  ║         Scalebox Installer            ║"
+  echo "  ╚═══════════════════════════════════════╝"
+  echo ""
+
+  check_root
+  check_os
+  check_kvm
+  preflight_check
+
+  install_deps
+  setup_storage
+  install_firecracker
+  setup_network
+  create_rootfs
+  install_binary
+  install_cli
+  install_service
+  start_service
+
+  echo ""
+  log "Installation complete!"
+  echo ""
+  echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
+  echo "  Token: $API_TOKEN"
+  echo ""
+  echo "  Commands:"
+  echo "    systemctl status scaleboxd"
+  echo "    journalctl -u scaleboxd -f"
+  echo "    scalebox vm list"
+  echo ""
+  echo "  Save your API token - it won't be shown again!"
+  echo ""
+}
+
+main "$@"

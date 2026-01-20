@@ -1,0 +1,132 @@
+#!/bin/bash
+set -euo pipefail
+
+API_URL="${SCALEBOX_URL:-http://localhost:8080}"
+API_TOKEN="${SCALEBOX_TOKEN:-}"
+
+# Read token from config if not set
+if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
+  API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+fi
+
+die() { echo "Error: $1" >&2; exit 1; }
+command -v jq &>/dev/null || die "jq is required. Install with: apt install jq"
+need_token() { [[ -n "$API_TOKEN" ]] || die "SCALEBOX_TOKEN not set"; }
+
+api() {
+  local method=$1 path=$2; shift 2
+  curl -sf -X "$method" -H "Authorization: Bearer $API_TOKEN" \
+    -H "Content-Type: application/json" "$@" "${API_URL}${path}"
+}
+
+cmd_vm_create() {
+  need_token
+  local template="" key=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--template) template=$2; shift 2 ;;
+      -k|--key) key=$2; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+  [[ -n "$template" && -n "$key" ]] || die "Usage: scalebox vm create -t TEMPLATE -k 'ssh-rsa ...'"
+  api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')" | jq .
+}
+
+cmd_vm_snapshot() {
+  need_token
+  local id="${1:-}"
+  local name=""
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -n|--name) name=$2; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+  [[ -n "$id" && -n "$name" ]] || die "Usage: scalebox vm snapshot <id> -n NAME"
+  api POST "/vms/$id/snapshot" -d "$(jq -n --arg n "$name" '{template_name:$n}')" | jq .
+}
+
+case "${1:-help}" in
+  status)
+    curl -sf "$API_URL/health" | jq .
+    ;;
+  vm)
+    case "${2:-}" in
+      list)
+        need_token
+        api GET /vms | jq -r '.vms[] | [.id, .template, .ip, .ssh_port] | @tsv' | column -t 2>/dev/null || cat
+        ;;
+      create)
+        shift 2
+        cmd_vm_create "$@"
+        ;;
+      get)
+        need_token
+        [[ -n "${3:-}" ]] || die "Usage: scalebox vm get <id>"
+        api GET "/vms/$3" | jq .
+        ;;
+      delete)
+        need_token
+        [[ -n "${3:-}" ]] || die "Usage: scalebox vm delete <id>"
+        api DELETE "/vms/$3"
+        echo "Deleted $3"
+        ;;
+      snapshot)
+        shift 2
+        cmd_vm_snapshot "$@"
+        ;;
+      *)
+        die "Usage: scalebox vm [list|create|get|delete|snapshot]"
+        ;;
+    esac
+    ;;
+  template)
+    case "${2:-}" in
+      list)
+        need_token
+        api GET /templates | jq -r '.templates[] | [.name, .size_bytes] | @tsv' | column -t 2>/dev/null || cat
+        ;;
+      delete)
+        need_token
+        [[ -n "${3:-}" ]] || die "Usage: scalebox template delete <name>"
+        api DELETE "/templates/$3"
+        echo "Deleted $3"
+        ;;
+      *)
+        die "Usage: scalebox template [list|delete]"
+        ;;
+    esac
+    ;;
+  help|--help|-h)
+    cat <<'EOF'
+Scalebox CLI
+
+Usage: scalebox <command>
+
+Commands:
+  status                        Health check
+  vm list                       List VMs
+  vm create -t TPL -k KEY       Create VM from template (KEY is the public key content)
+  vm get <id>                   Get VM details
+  vm delete <id>                Delete VM
+  vm snapshot <id> -n NAME      Snapshot VM to template
+  template list                 List templates
+  template delete <name>        Delete template
+
+Environment:
+  SCALEBOX_URL    API URL (default: http://localhost:8080)
+  SCALEBOX_TOKEN  API token (reads /etc/scalebox/config if not set)
+
+Examples:
+  scalebox status
+  scalebox vm create -t debian-base -k "$(cat ~/.ssh/id_rsa.pub)"
+  scalebox vm list
+  scalebox vm snapshot vm-abc123 -n my-snapshot
+EOF
+    ;;
+  *)
+    die "Unknown command: $1. Try: scalebox help"
+    ;;
+esac

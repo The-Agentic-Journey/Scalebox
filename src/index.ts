@@ -90,4 +90,6 @@ app.post("/vms/:id/snapshot", async (c) => {
 	}
 });
 
-export default { port: config.apiPort, hostname: "0.0.0.0", fetch: app.fetch };
+const host = "0.0.0.0";
+console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
+export default { port: config.apiPort, hostname: host, fetch: app.fetch };

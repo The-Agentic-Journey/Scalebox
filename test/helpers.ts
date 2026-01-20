@@ -4,14 +4,15 @@ import { $ } from "bun";
 
 const FIXTURES_DIR = join(import.meta.dir, "fixtures");
 
-// API configuration - VM_HOST can be localhost (via SSH tunnel) or remote VM IP
-export const VM_HOST = process.env.VM_HOST || "34.89.142.221";
+// Configuration
+export const VM_HOST = process.env.VM_HOST || "localhost";
 export const API_PORT = process.env.API_PORT || "8080";
 export const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
-const API_TOKEN = process.env.API_TOKEN || "dev-5a30aabffc0d8308ec749c49d94164705fc2d4b57c50b800";
+const API_TOKEN = process.env.API_TOKEN || "dev-token";
 
-// SSH configuration - SSH_HOST must be the actual remote VM (not tunneled)
-export const SSH_HOST = process.env.SSH_HOST || "34.89.142.221";
+// SSH
+export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
+export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
 
 // API client
 export const api = {
@@ -44,26 +45,20 @@ export const api = {
 	},
 };
 
-// SSH helpers
-export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
-export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
-
-export async function waitForSsh(vmIp: string, timeoutMs: number): Promise<void> {
-	const jumpHost = `dev@${SSH_HOST}`;
+// SSH via proxy port (connects to VM_HOST on the proxy port, not internal IP)
+export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<void> {
 	const start = Date.now();
 	while (Date.now() - start < timeoutMs) {
 		try {
-			// Try SSH with ProxyJump - just check if we can connect
-			await $`ssh -J ${jumpHost} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${vmIp} exit`.quiet();
+			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
 			return;
 		} catch {
 			await Bun.sleep(1000);
 		}
 	}
-	throw new Error(`SSH not ready on ${vmIp} within ${timeoutMs}ms`);
+	throw new Error(`SSH not ready on port ${sshPort} within ${timeoutMs}ms`);
 }
 
-export async function sshExec(vmIp: string, command: string): Promise<string> {
-	const jumpHost = `dev@${SSH_HOST}`;
-	return await $`ssh -J ${jumpHost} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${TEST_PRIVATE_KEY_PATH} root@${vmIp} ${command}`.text();
+export async function sshExec(sshPort: number, command: string): Promise<string> {
+	return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
 }

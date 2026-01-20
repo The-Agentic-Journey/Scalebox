@@ -1,16 +1,20 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VM_HOST="${VM_HOST:-34.89.142.221}"
-VM_USER="${VM_USER:-dev}"
-REMOTE_DIR="/home/${VM_USER}/firecracker-api"
+GCLOUD_ZONE="${GCLOUD_ZONE:-us-central1-a}"
+GCLOUD_PROJECT="${GCLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || echo '')}"
+VM_NAME=""
+VM_IP=""
+KEEP_VM="${KEEP_VM:-false}"
 
 # Local bun installation
 BUN_DIR="$SCRIPT_DIR/.bun"
 BUN_BIN="$BUN_DIR/bin/bun"
+
+die() { echo "Error: $1" >&2; exit 1; }
 
 ensure_bun() {
   if [[ ! -x "$BUN_BIN" ]]; then
@@ -26,75 +30,210 @@ ensure_deps() {
   fi
 }
 
-bun_run() {
-  ensure_bun
-  ensure_deps
-  "$BUN_BIN" "$@"
+cleanup() {
+  if [[ -n "$VM_NAME" && "$KEEP_VM" != "true" ]]; then
+    echo "==> Deleting VM: $VM_NAME"
+    gcloud compute instances delete "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --quiet 2>/dev/null || true
+  fi
 }
 
-case "${1:-}" in
+create_vm() {
+  VM_NAME="scalebox-test-$(date +%s)-$$-$RANDOM"
+  echo "==> Creating VM: $VM_NAME"
+
+  gcloud compute instances create "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --machine-type=n2-standard-2 \
+    --image-family=debian-12 \
+    --image-project=debian-cloud \
+    --boot-disk-size=50GB \
+    --boot-disk-type=pd-ssd \
+    --enable-nested-virtualization \
+    --tags=scalebox-test \
+    --quiet
+
+  VM_IP=$(gcloud compute instances describe "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+
+  [[ -n "$VM_IP" ]] || die "VM has no external IP. Check GCE configuration."
+
+  echo "==> VM IP: $VM_IP"
+}
+
+wait_for_ssh() {
+  echo "==> Waiting for SSH..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if gcloud compute ssh "$VM_NAME" \
+         --zone="$GCLOUD_ZONE" \
+         --project="$GCLOUD_PROJECT" \
+         --command="echo ready" \
+         --quiet 2>/dev/null; then
+      return 0
+    fi
+    sleep 5
+    ((retries--)) || true
+  done
+  die "SSH not ready after 150s"
+}
+
+provision_vm() {
+  # Verify builds directory exists and has files
+  [[ -d builds && -n "$(ls -A builds 2>/dev/null)" ]] || die "builds/ directory is empty. Run './do build' first."
+
+  echo "==> Creating target directory..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo mkdir -p /opt/scalebox && sudo chown \$(whoami) /opt/scalebox" \
+    --quiet
+
+  echo "==> Copying builds to VM..."
+  gcloud compute scp --recurse builds/ "$VM_NAME:/opt/scalebox/" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --quiet
+
+  # Move files from builds/ subdirectory to /opt/scalebox/
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="mv /opt/scalebox/builds/* /opt/scalebox/ && rmdir /opt/scalebox/builds" \
+    --quiet
+
+  echo "==> Running install script..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo bash /opt/scalebox/install.sh" \
+    --quiet
+}
+
+get_api_token() {
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2-" \
+    --quiet
+}
+
+# === Commands ===
+
+do_build() {
+  ensure_bun
+  ensure_deps
+
+  echo "==> Building..."
+
+  # Check scripts directory exists
+  [[ -d scripts ]] || die "scripts/ directory not found. Run from project root."
+
+  rm -rf builds
+  mkdir -p builds
+
+  # Compile server
+  "$BUN_BIN" build src/index.ts --compile --outfile builds/scaleboxd
+
+  # Verify binary was created
+  [[ -f builds/scaleboxd ]] || die "Failed to compile scaleboxd"
+
+  # Copy scripts
+  cp scripts/install.sh builds/
+  cp scripts/scalebox builds/
+  cp scripts/scaleboxd.service builds/
+
+  chmod +x builds/scaleboxd builds/scalebox builds/install.sh
+
+  echo "==> Build complete"
+  ls -la builds/
+}
+
+do_lint() {
+  ensure_bun
+  ensure_deps
+  "$BUN_BIN" run lint
+}
+
+do_test() {
+  ensure_bun
+  ensure_deps
+  "$BUN_BIN" test "$@"
+}
+
+check_firewall_rule() {
+  echo "==> Checking firewall rule..."
+  if ! gcloud compute firewall-rules describe scalebox-test-allow \
+       --project="$GCLOUD_PROJECT" &>/dev/null; then
+    die "Firewall rule 'scalebox-test-allow' not found. Create it first (see Phase 0 in PLAN-SCALEBOX.md)"
+  fi
+}
+
+do_check() {
+  trap cleanup EXIT
+
+  ensure_bun
+  ensure_deps
+
+  # Verify firewall rule exists before creating VM
+  check_firewall_rule
+
+  echo "==> Linting..."
+  do_lint
+
+  echo "==> Building..."
+  do_build
+
+  echo "==> Creating test VM..."
+  create_vm
+  wait_for_ssh
+  provision_vm
+
+  echo "==> Getting API token..."
+  local token
+  token=$(get_api_token)
+  [[ -n "$token" ]] || die "Failed to get API token"
+
+  echo "==> Running tests against $VM_IP..."
+  VM_HOST="$VM_IP" API_TOKEN="$token" "$BUN_BIN" test
+
+  echo ""
+  echo "==> All tests passed!"
+}
+
+# === Main ===
+
+case "${1:-help}" in
+  build) do_build ;;
+  lint) do_lint ;;
+  test) shift; do_test "$@" ;;
   check)
-    echo "==> Running linter..."
-    bun_run run lint
-    echo "==> Deploying to VM..."
-    "$0" deploy
-    echo "==> Restarting server on VM..."
-    "$0" stop
-    "$0" start
-    sleep 2  # Give server time to start
-    echo "==> Setting up SSH tunnel for tests..."
-    # Create SSH tunnel: local 8080 -> remote localhost:8080
-    ssh -f -N -L 8080:localhost:8080 "${VM_USER}@${VM_HOST}" -o ExitOnForwardFailure=yes || true
-    sleep 1
-    echo "==> Running integration tests..."
-    VM_HOST=localhost bun_run test
-    # Kill the tunnel
-    pkill -f "ssh -f -N -L 8080:localhost:8080" 2>/dev/null || true
+    shift || true
+    [[ "${1:-}" == "--keep-vm" ]] && KEEP_VM=true
+    do_check
     ;;
-  lint)
-    bun_run run lint
-    ;;
-  test)
-    bun_run test
-    ;;
-  build)
-    bun_run build --compile --outfile=firecracker-api ./src/index.ts
-    ;;
-  deploy)
-    # Build single binary locally
-    echo "Building binary..."
-    bun_run build --compile --outfile=firecracker-api ./src/index.ts
-    # Create remote directory and sync binary + provision scripts
-    ssh "${VM_USER}@${VM_HOST}" "mkdir -p ${REMOTE_DIR}/provision"
-    rsync -avz firecracker-api "${VM_USER}@${VM_HOST}:${REMOTE_DIR}/"
-    rsync -avz provision/ "${VM_USER}@${VM_HOST}:${REMOTE_DIR}/provision/"
-    ;;
-  provision)
-    # Run provisioning scripts on remote VM
-    ssh "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && sudo ./provision/setup.sh"
-    ;;
-  start)
-    # Start the API server on remote VM (in background)
-    # Use -f to background SSH and </dev/null to detach stdin
-    ssh -f "${VM_USER}@${VM_HOST}" "cd ${REMOTE_DIR} && nohup ./firecracker-api > server.log 2>&1 </dev/null &"
-    echo "Server started on ${VM_HOST}:8080"
-    ;;
-  stop)
-    # Stop the API server on remote VM
-    # Use pattern that won't match the ssh/pkill command itself
-    ssh "${VM_USER}@${VM_HOST}" "pkill -f '^./firecracker-api' || true"
-    echo "Server stopped"
-    ;;
-  logs)
-    # Tail server logs from remote VM
-    ssh "${VM_USER}@${VM_HOST}" "tail -f ${REMOTE_DIR}/server.log"
-    ;;
-  ssh)
-    # SSH into the remote VM
-    ssh "${VM_USER}@${VM_HOST}"
-    ;;
-  *)
-    echo "Usage: ./do {check|lint|test|build|deploy|provision|start|stop|logs|ssh}"
-    exit 1
+  help|*)
+    cat <<'EOF'
+Scalebox Development Script
+
+Usage: ./do <command>
+
+Commands:
+  build              Build scaleboxd binary and copy scripts to builds/
+  lint               Run linter
+  test               Run tests locally (requires VM_HOST and API_TOKEN)
+  check              Full CI: lint, build, create VM, provision, test, cleanup
+  check --keep-vm    Same but keep VM for debugging
+
+Environment:
+  GCLOUD_ZONE        GCE zone (default: us-central1-a)
+  GCLOUD_PROJECT     GCE project (default: current gcloud config)
+  KEEP_VM=true       Don't delete VM after tests
+EOF
     ;;
 esac
