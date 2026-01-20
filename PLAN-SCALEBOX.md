@@ -1,4 +1,4 @@
-# Scalebox Refactoring Plan v7
+# Scalebox Refactoring Plan v8
 
 This plan transforms firecracker-api into **scalebox** with self-contained provisioning, systemd service management, ephemeral test VMs, and a CLI.
 
@@ -252,7 +252,7 @@ setup_network() {
 [keyfile]
 unmanaged-devices=interface-name:br0;interface-name:tap*
 EOF
-    systemctl reload NetworkManager 2>/dev/null && sleep 1 || true
+    systemctl reload NetworkManager 2>/dev/null && sleep 3 || true
   fi
 
   # Enable IP forwarding
@@ -427,13 +427,16 @@ install_service() {
   [[ -z "$API_TOKEN" ]] && API_TOKEN="sb-$(openssl rand -hex 24)"
 
   # Write config with restricted permissions (token is sensitive)
-  cat > /etc/scalebox/config <<EOF
+  # Use umask to prevent brief window where file is world-readable
+  (
+    umask 077
+    cat > /etc/scalebox/config <<EOF
 API_PORT=$API_PORT
 API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
 EOF
-  chmod 600 /etc/scalebox/config
+  )
 
   # Copy service file
   if [[ -f "$INSTALL_DIR/scaleboxd.service" ]]; then
@@ -683,146 +686,18 @@ Add:
 builds/
 ```
 
-### 1.9 Delete old provision scripts
-
-```bash
-rm -rf provision/
-```
-
 ### Verification
 
 ```bash
-# Note: do script is replaced in Phase 3, so verify manually:
-mkdir -p builds
-./.bun/bin/bun build src/index.ts --compile --outfile builds/scaleboxd
-cp scripts/install.sh scripts/scalebox scripts/scaleboxd.service builds/
-chmod +x builds/*
-ls -la builds/
-# Should show: scaleboxd, scalebox, scaleboxd.service, install.sh
-rm -rf builds/  # cleanup for now
+# Verification happens after Phase 2 (do script replacement)
+# See Phase 2 verification
 ```
 
 ---
 
-## Phase 2: Update Test Helpers
+## Phase 2: Replace do Script
 
-**Goal**: Tests use proxy ports instead of SSH ProxyJump.
-
-### 2.1 Update `test/helpers.ts`
-
-Replace entire file:
-
-```typescript
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { $ } from "bun";
-
-const FIXTURES_DIR = join(import.meta.dir, "fixtures");
-
-// Configuration
-export const VM_HOST = process.env.VM_HOST || "localhost";
-export const API_PORT = process.env.API_PORT || "8080";
-export const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
-const API_TOKEN = process.env.API_TOKEN || "dev-token";
-
-// SSH
-export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
-export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
-
-// API client
-export const api = {
-  async get(path: string) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { Authorization: `Bearer ${API_TOKEN}` },
-    });
-    return { status: res.status, data: res.ok ? await res.json() : null };
-  },
-  async post(path: string, body: unknown) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return { status: res.status, data: res.ok ? await res.json() : null };
-  },
-  async delete(path: string) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${API_TOKEN}` },
-    });
-    return { status: res.status };
-  },
-  async getRaw(path: string, token?: string) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    return { status: res.status };
-  },
-};
-
-// SSH via proxy port (connects to VM_HOST on the proxy port, not internal IP)
-export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
-      return;
-    } catch {
-      await Bun.sleep(1000);
-    }
-  }
-  throw new Error(`SSH not ready on port ${sshPort} within ${timeoutMs}ms`);
-}
-
-export async function sshExec(sshPort: number, command: string): Promise<string> {
-  return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
-}
-```
-
-### 2.2 Update `test/integration.test.ts`
-
-**All occurrences to change** (15 total):
-
-| Line | Change From | Change To |
-|------|-------------|-----------|
-| ~136 | `waitForSsh(data.ip, 30000)` | `waitForSsh(data.ssh_port, 30000)` |
-| ~150 | `waitForSsh(data.ip, 30000)` | `waitForSsh(data.ssh_port, 30000)` |
-| ~151 | `sshExec(data.ip, "echo hello")` | `sshExec(data.ssh_port, "echo hello")` |
-| ~169 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
-| ~199 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
-| ~228 | `waitForSsh(vm1.ip, 30000)` | `waitForSsh(vm1.ssh_port, 30000)` |
-| ~249 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
-| ~250 | `sshExec(vm2.ip, "echo hello")` | `sshExec(vm2.ssh_port, "echo hello")` |
-| ~267 | `waitForSsh(vm1.ip, 30000)` | `waitForSsh(vm1.ssh_port, 30000)` |
-| ~271 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
-| ~274 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
-| ~278 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
-| ~296 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
-| ~297 | `sshExec(vm2.ip, ...)` | `sshExec(vm2.ssh_port, ...)` |
-| ~315 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
-
-**Search/replace pattern:**
-- Find: `waitForSsh(data.ip,` → Replace: `waitForSsh(data.ssh_port,`
-- Find: `waitForSsh(vm.ip,` → Replace: `waitForSsh(vm.ssh_port,`
-- Find: `waitForSsh(vm1.ip,` → Replace: `waitForSsh(vm1.ssh_port,`
-- Find: `waitForSsh(vm2.ip,` → Replace: `waitForSsh(vm2.ssh_port,`
-- Find: `sshExec(data.ip,` → Replace: `sshExec(data.ssh_port,`
-- Find: `sshExec(vm.ip,` → Replace: `sshExec(vm.ssh_port,`
-- Find: `sshExec(vm1.ip,` → Replace: `sshExec(vm1.ssh_port,`
-- Find: `sshExec(vm2.ip,` → Replace: `sshExec(vm2.ssh_port,`
-
-### Verification
-
-```bash
-# TypeScript should compile without errors
-./do lint
-```
-
----
-
-## Phase 3: Ephemeral Test VMs
-
-**Goal**: `./do check` creates fresh GCE VM, provisions, tests, deletes.
+**Goal**: New `do` script with build command and ephemeral GCE VM support.
 
 ### Replace `do` script entirely
 
@@ -996,11 +871,22 @@ do_test() {
   "$BUN_BIN" test "$@"
 }
 
+check_firewall_rule() {
+  echo "==> Checking firewall rule..."
+  if ! gcloud compute firewall-rules describe scalebox-test-allow \
+       --project="$GCLOUD_PROJECT" &>/dev/null; then
+    die "Firewall rule 'scalebox-test-allow' not found. Create it first (see Phase 0 in PLAN-SCALEBOX.md)"
+  fi
+}
+
 do_check() {
   trap cleanup EXIT
 
   ensure_bun
   ensure_deps
+
+  # Verify firewall rule exists before creating VM
+  check_firewall_rule
 
   echo "==> Linting..."
   do_lint
@@ -1061,17 +947,142 @@ esac
 ### Verification
 
 ```bash
-# Test 1: Normal run - VM should be deleted after
-./do check
-gcloud compute instances list --filter="name~scalebox-test"
-# Should be empty
+# Build should work (also validates Phase 1)
+./do build
+ls -la builds/
+# Should show: scaleboxd, scalebox, scaleboxd.service, install.sh
+```
 
-# Test 2: Keep VM for debugging
+### 2.1 Delete old provision scripts
+
+Now that the new `do` script is verified, delete the old provision directory:
+
+```bash
+rm -rf provision/
+```
+
+---
+
+## Phase 3: Update Test Helpers
+
+**Goal**: Tests use proxy ports instead of SSH ProxyJump.
+
+### 3.1 Update `test/helpers.ts`
+
+Replace entire file:
+
+```typescript
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { $ } from "bun";
+
+const FIXTURES_DIR = join(import.meta.dir, "fixtures");
+
+// Configuration
+export const VM_HOST = process.env.VM_HOST || "localhost";
+export const API_PORT = process.env.API_PORT || "8080";
+export const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
+const API_TOKEN = process.env.API_TOKEN || "dev-token";
+
+// SSH
+export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
+export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
+
+// API client
+export const api = {
+  async get(path: string) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { Authorization: `Bearer ${API_TOKEN}` },
+    });
+    return { status: res.status, data: res.ok ? await res.json() : null };
+  },
+  async post(path: string, body: unknown) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, data: res.ok ? await res.json() : null };
+  },
+  async delete(path: string) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${API_TOKEN}` },
+    });
+    return { status: res.status };
+  },
+  async getRaw(path: string, token?: string) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    return { status: res.status };
+  },
+};
+
+// SSH via proxy port (connects to VM_HOST on the proxy port, not internal IP)
+export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
+      return;
+    } catch {
+      await Bun.sleep(1000);
+    }
+  }
+  throw new Error(`SSH not ready on port ${sshPort} within ${timeoutMs}ms`);
+}
+
+export async function sshExec(sshPort: number, command: string): Promise<string> {
+  return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
+}
+```
+
+### 3.2 Update `test/integration.test.ts`
+
+**All occurrences to change** (15 total):
+
+| Line | Change From | Change To |
+|------|-------------|-----------|
+| ~136 | `waitForSsh(data.ip, 30000)` | `waitForSsh(data.ssh_port, 30000)` |
+| ~150 | `waitForSsh(data.ip, 30000)` | `waitForSsh(data.ssh_port, 30000)` |
+| ~151 | `sshExec(data.ip, "echo hello")` | `sshExec(data.ssh_port, "echo hello")` |
+| ~169 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
+| ~199 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
+| ~228 | `waitForSsh(vm1.ip, 30000)` | `waitForSsh(vm1.ssh_port, 30000)` |
+| ~249 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
+| ~250 | `sshExec(vm2.ip, "echo hello")` | `sshExec(vm2.ssh_port, "echo hello")` |
+| ~267 | `waitForSsh(vm1.ip, 30000)` | `waitForSsh(vm1.ssh_port, 30000)` |
+| ~271 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
+| ~274 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
+| ~278 | `sshExec(vm1.ip, ...)` | `sshExec(vm1.ssh_port, ...)` |
+| ~296 | `waitForSsh(vm2.ip, 30000)` | `waitForSsh(vm2.ssh_port, 30000)` |
+| ~297 | `sshExec(vm2.ip, ...)` | `sshExec(vm2.ssh_port, ...)` |
+| ~315 | `waitForSsh(vm.ip, 30000)` | `waitForSsh(vm.ssh_port, 30000)` |
+
+**Search/replace pattern:**
+- Find: `waitForSsh(data.ip,` → Replace: `waitForSsh(data.ssh_port,`
+- Find: `waitForSsh(vm.ip,` → Replace: `waitForSsh(vm.ssh_port,`
+- Find: `waitForSsh(vm1.ip,` → Replace: `waitForSsh(vm1.ssh_port,`
+- Find: `waitForSsh(vm2.ip,` → Replace: `waitForSsh(vm2.ssh_port,`
+- Find: `sshExec(data.ip,` → Replace: `sshExec(data.ssh_port,`
+- Find: `sshExec(vm.ip,` → Replace: `sshExec(vm.ssh_port,`
+- Find: `sshExec(vm1.ip,` → Replace: `sshExec(vm1.ssh_port,`
+- Find: `sshExec(vm2.ip,` → Replace: `sshExec(vm2.ssh_port,`
+
+### Verification
+
+```bash
+# TypeScript should compile without errors
+./do lint
+
+# Full test (creates ephemeral VM, runs tests, deletes VM)
+./do check
+
+# To keep VM for debugging:
 ./do check --keep-vm
 gcloud compute instances list --filter="name~scalebox-test"
-# Should show the VM
-
-# Manual cleanup
+# Manual cleanup:
 gcloud compute instances delete scalebox-test-XXXXX --zone=us-central1-a --quiet
 ```
 
@@ -1109,19 +1120,17 @@ Phase 0: Prerequisites ───────────────────
          ▼
 Phase 1: Rename + Consolidate ───────────────────────────────────►
          │ config.ts, scripts/, delete provision/
-         │ Verify: ./do build works
          ▼
-Phase 2: Update Test Helpers ────────────────────────────────────►
+Phase 2: Replace do script ──────────────────────────────────────►
+         │ new do script with gcloud + build command
+         │ Verify: ./do build works (validates Phase 1 too)
+         ▼
+Phase 3: Update Test Helpers ────────────────────────────────────►
          │ proxy ports instead of ProxyJump
-         │ Verify: ./do lint passes
-         ▼
-Phase 3: Ephemeral VMs ──────────────────────────────────────────►
-         │ new do script with gcloud
-         │ Verify: ./do check creates VM, tests pass, VM deleted
+         │ Verify: ./do lint, ./do check
          ▼
 Phase 4: CLI Verification ───────────────────────────────────────►
-         │ manual testing
-         │ Verify: all commands work
+         │ manual testing on provisioned VM
          ▼
          DONE
 ```
@@ -1133,9 +1142,9 @@ Phase 4: CLI Verification ──────────────────
 | Phase | Verification | Result |
 |-------|--------------|--------|
 | 0 | `gcloud compute instances list` | Works, firewall rule exists |
-| 1 | `./do build && ls builds/` | 4 files: scaleboxd, scalebox, install.sh, scaleboxd.service |
-| 2 | `./do lint` | No TypeScript errors |
-| 3 | `./do check` | VM created, all tests pass, VM deleted |
+| 1 | (verified by Phase 2) | scripts/ directory created |
+| 2 | `./do build && ls builds/` | 4 files: scaleboxd, scalebox, install.sh, scaleboxd.service |
+| 3 | `./do lint` then `./do check` | Lint passes, VM created, tests pass, VM deleted |
 | 4 | CLI commands | All work on provisioned VM |
 
 ---
@@ -1169,9 +1178,9 @@ Phase 4: CLI Verification ──────────────────
 | No nested virt | n2-standard-2 in us-central1-a |
 | Install fails midway | Cleanup trap for temp dirs + pre-flight check |
 | Token extraction fails | Explicit error before tests, `cut -d= -f2-` handles tokens with `=` |
-| Firewall blocks | Phase 0 creates rule |
+| Firewall blocks | Phase 0 creates rule + do_check() verifies rule exists before creating VM |
 | VM not deleted | trap EXIT + unique name with PID+RANDOM |
-| Network conflicts | Configure NetworkManager to ignore br0/tap* (not disable) + sleep after reload |
+| Network conflicts | Configure NetworkManager to ignore br0/tap* (not disable) + 3s sleep after reload |
 | iptables not restored | systemd service after network.target, uses /usr/sbin path |
 | Bridge not persistent | systemd-networkd manages bridge |
 | VMs can't reach internet | FORWARD iptables rules for br0 traffic |
@@ -1182,7 +1191,7 @@ Phase 4: CLI Verification ──────────────────
 | Token regen on reinstall | Preserve existing token from config if present |
 | Service not restarted on upgrade | Use `systemctl restart` instead of `start` |
 | /dev/kvm permissions | Check read+write access, not just existence |
-| Config file permissions | chmod 600 on /etc/scalebox/config (token is sensitive) |
+| Config file permissions | umask 077 subshell prevents brief window of world-readable config |
 | `((retries--))` with set -e | Add `\|\| true` to prevent premature script exit when result is 0 |
 | CLI requires jq | Check at startup with helpful error message |
 | Service starts before network ready | Add After/Wants for systemd-networkd.service |
