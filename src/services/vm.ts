@@ -10,6 +10,7 @@ import {
 	startFirecracker,
 	stopFirecracker,
 } from "./firecracker";
+import { generateUniqueName } from "./nameGenerator";
 import {
 	allocateIp,
 	allocatePort,
@@ -59,6 +60,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		throw { status: 400, message: "Invalid template name" };
 	}
 
+	const name = req.name || generateUniqueName();
 	const vmId = generateVmId();
 	const ip = allocateIp();
 	const port = allocatePort(config.portMin, config.portMax);
@@ -101,7 +103,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		// Create VM record
 		const vm: VM = {
 			id: vmId,
-			name: req.name,
+			name,
 			template: req.template,
 			ip,
 			port,
@@ -157,13 +159,15 @@ export async function deleteVm(vm: VM): Promise<void> {
 
 export function vmToResponse(vm: VM): VMResponse {
 	const host = process.env.VM_HOST || "localhost";
+	const url = config.baseDomain ? `https://${vm.name}.${config.baseDomain}` : null;
 	return {
 		id: vm.id,
-		name: vm.name || null,
+		name: vm.name,
 		template: vm.template,
 		ip: vm.ip,
 		ssh_port: vm.port,
 		ssh: `ssh -p ${vm.port} root@${host}`,
+		url,
 		status: "running",
 		created_at: vm.createdAt.toISOString(),
 	};
