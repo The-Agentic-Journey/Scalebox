@@ -61,42 +61,42 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 
 | Context | Purpose | Strategic Value |
 |---------|---------|-----------------|
-| **VM Lifecycle** | Orchestrates VM creation, deletion, and snapshotting | Highest - this is the product's core value proposition |
+| [**VM Lifecycle**](contexts/vm-lifecycle.md) | Orchestrates VM creation, deletion, and snapshotting | Highest - this is the product's core value proposition |
 
 ### Supporting Domains
 
 | Context | Purpose | Strategic Value |
 |---------|---------|-----------------|
-| **Template** | Manages reusable VM images | High - enables fast, repeatable VM creation |
-| **Access** | Provides external connectivity to VMs | High - makes VMs usable |
+| [**Template**](contexts/template.md) | Manages reusable VM images | High - enables fast, repeatable VM creation |
+| [**Access**](contexts/access.md) | Provides external connectivity to VMs | High - makes VMs usable |
 
 ### Infrastructure Domains
 
 | Context | Purpose | Strategic Value |
 |---------|---------|-----------------|
-| **Networking** | Allocates IPs, ports, and network interfaces | Medium - commodity but essential |
-| **Storage** | Manages rootfs files with COW optimization | Medium - commodity but essential |
-| **Hypervisor** | Controls Firecracker processes | Medium - commodity but essential |
+| [**Networking**](contexts/networking.md) | Allocates IPs, ports, and network interfaces | Medium - commodity but essential |
+| [**Storage**](contexts/storage.md) | Manages rootfs files with COW optimization | Medium - commodity but essential |
+| [**Hypervisor**](contexts/hypervisor.md) | Controls Firecracker processes | Medium - commodity but essential |
 
 ---
 
 ## Context Relationships
 
-### VM Lifecycle → Template
+### [VM Lifecycle](contexts/vm-lifecycle.md) → [Template](contexts/template.md)
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Template
 **Integration:**
 - VM creation reads from Template context to copy rootfs
 - VM snapshotting writes to Template context to create new templates
 
-### VM Lifecycle → Networking
+### [VM Lifecycle](contexts/vm-lifecycle.md) → [Networking](contexts/networking.md)
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Networking
 **Integration:**
 - VM creation requests IP, port, and TAP device allocation
 - VM deletion releases allocated network resources
 
-### VM Lifecycle → Storage
+### [VM Lifecycle](contexts/vm-lifecycle.md) → [Storage](contexts/storage.md)
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Storage
 **Integration:**
@@ -104,7 +104,7 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 - VM deletion removes rootfs
 - Snapshotting copies rootfs to template location
 
-### VM Lifecycle → Hypervisor
+### [VM Lifecycle](contexts/vm-lifecycle.md) → [Hypervisor](contexts/hypervisor.md)
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Hypervisor
 **Integration:**
@@ -112,7 +112,7 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 - VM deletion stops Firecracker process
 - Snapshotting pauses/resumes VM
 
-### VM Lifecycle → Access
+### [VM Lifecycle](contexts/vm-lifecycle.md) → [Access](contexts/access.md)
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Access
 **Integration:**
@@ -120,7 +120,7 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 - VM deletion stops TCP proxy
 - VM creation/deletion triggers Caddy config update
 
-### Template → Storage
+### [Template](contexts/template.md) → [Storage](contexts/storage.md)
 **Relationship:** Shared Kernel
 **Direction:** Both operate on same storage paths
 **Integration:**
@@ -176,6 +176,8 @@ API Request
 Template  Networking  Storage  Hypervisor  Access
 ```
 
+Context links: [VM Lifecycle](contexts/vm-lifecycle.md) → [Template](contexts/template.md), [Networking](contexts/networking.md), [Storage](contexts/storage.md), [Hypervisor](contexts/hypervisor.md), [Access](contexts/access.md)
+
 No message queues, event buses, or async communication patterns are currently used. Domain events are implicit (not explicitly published).
 
 ---
@@ -184,15 +186,15 @@ No message queues, event buses, or async communication patterns are currently us
 
 | File | Context |
 |------|---------|
-| `src/services/vm.ts` | VM Lifecycle |
-| `src/services/template.ts` | Template |
-| `src/services/network.ts` | Networking |
-| `src/services/storage.ts` | Storage |
-| `src/services/firecracker.ts` | Hypervisor |
-| `src/services/proxy.ts` | Access (TCP Proxy) |
-| `src/services/caddy.ts` | Access (HTTPS Gateway) |
-| `src/services/nameGenerator.ts` | VM Lifecycle (supporting) |
-| `src/services/wordlists.ts` | VM Lifecycle (supporting) |
+| `src/services/vm.ts` | [VM Lifecycle](contexts/vm-lifecycle.md) |
+| `src/services/template.ts` | [Template](contexts/template.md) |
+| `src/services/network.ts` | [Networking](contexts/networking.md) |
+| `src/services/storage.ts` | [Storage](contexts/storage.md) |
+| `src/services/firecracker.ts` | [Hypervisor](contexts/hypervisor.md) |
+| `src/services/proxy.ts` | [Access](contexts/access.md) (TCP Proxy) |
+| `src/services/caddy.ts` | [Access](contexts/access.md) (HTTPS Gateway) |
+| `src/services/nameGenerator.ts` | [VM Lifecycle](contexts/vm-lifecycle.md) (supporting) |
+| `src/services/wordlists.ts` | [VM Lifecycle](contexts/vm-lifecycle.md) (supporting) |
 | `src/types.ts` | Shared Kernel |
 | `src/config.ts` | Shared Kernel |
 | `src/index.ts` | Application Layer |
