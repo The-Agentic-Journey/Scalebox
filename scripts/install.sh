@@ -9,12 +9,13 @@
 set -euo pipefail
 
 # === Configuration ===
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${INSTALL_DIR:-$SCRIPT_DIR}"
 DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
 API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
 DOMAIN="${DOMAIN:-}"
 BASE_DOMAIN="${BASE_DOMAIN:-}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/scalebox}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
