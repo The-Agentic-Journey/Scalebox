@@ -78,12 +78,13 @@ src/
 ### Quick Install
 
 ```bash
-# Download and run installer
-curl -sSL https://your-host/install.sh | sudo bash
-
-# Or from local builds directory
-sudo bash /opt/scalebox/install.sh
+# Download latest release
+curl -L https://github.com/OWNER/scalebox/releases/latest/download/scalebox-build-LATEST.tar.gz -o scalebox.tar.gz
+tar xzf scalebox.tar.gz
+sudo ./install.sh
 ```
+
+Or download a specific version from the [Releases page](https://github.com/OWNER/scalebox/releases).
 
 ### Environment Variables
 
