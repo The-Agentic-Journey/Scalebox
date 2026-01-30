@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-main
+  cancel-in-progress: true
+
+env:
+  GCLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+  DNS_ZONE: ${{ secrets.DNS_ZONE }}
+  DNS_SUFFIX: ${{ secrets.DNS_SUFFIX }}
+
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cache bun
+        uses: actions/cache@v4
+        with:
+          path: .bun
+          key: bun-${{ runner.os }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
+
+      - name: Run CI (lint, build, test)
+        env:
+          GCLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          DNS_ZONE: ${{ secrets.DNS_ZONE }}
+          DNS_SUFFIX: ${{ secrets.DNS_SUFFIX }}
+        run: ./do check
+
+      - name: Create release tarball
+        run: |
+          cd builds
+          tar -czvf ../scalebox-build-${{ github.run_number }}.tar.gz .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          files: scalebox-build-${{ github.run_number }}.tar.gz
+          body: |
+            Automated build from commit ${{ github.sha }}
+
+            ## Installation
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/scalebox-build-${{ github.run_number }}.tar.gz | tar xz
+            sudo ./install.sh
+            ```
