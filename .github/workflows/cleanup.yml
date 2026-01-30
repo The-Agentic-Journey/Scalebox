@@ -1,0 +1,54 @@
+name: Cleanup Orphaned VMs
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Delete stale VMs
+        run: |
+          # Find VMs older than 1 hour with scalebox-test prefix
+          CUTOFF=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S)
+
+          gcloud compute instances list \
+            --filter="name~'^scalebox-test-' AND creationTimestamp<'${CUTOFF}'" \
+            --format="value(name,zone)" \
+            --project=${{ secrets.GCP_PROJECT_ID }} | \
+          while read NAME ZONE; do
+            echo "Deleting stale VM: $NAME in $ZONE"
+            gcloud compute instances delete "$NAME" \
+              --zone="$ZONE" \
+              --project=${{ secrets.GCP_PROJECT_ID }} \
+              --quiet || true
+          done
+
+      - name: Delete stale DNS records
+        run: |
+          # Delete any scalebox-test-* DNS records
+          gcloud dns record-sets list \
+            --zone=${{ secrets.DNS_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --filter="name~'^scalebox-test-'" \
+            --format="value(name,type)" | \
+          while read NAME TYPE; do
+            echo "Deleting stale DNS record: $NAME"
+            gcloud dns record-sets delete "$NAME" \
+              --zone=${{ secrets.DNS_ZONE }} \
+              --project=${{ secrets.GCP_PROJECT_ID }} \
+              --type="$TYPE" \
+              --quiet || true
+          done
