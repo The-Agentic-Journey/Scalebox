@@ -1,7 +1,6 @@
-import * as net from "node:net";
+import type { Socket, TCPSocketListener } from "bun";
 
-const proxies = new Map<string, net.Server>();
-const connections = new Map<string, Set<net.Socket>>();
+const proxies = new Map<string, TCPSocketListener<{ targetIp: string; targetPort: number }>>();
 
 export function startProxy(
 	vmId: string,
@@ -10,65 +9,78 @@ export function startProxy(
 	targetPort: number,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const sockets = new Set<net.Socket>();
-		connections.set(vmId, sockets);
-
-		const server = net.createServer((clientSocket) => {
-			sockets.add(clientSocket);
-
-			const vmSocket = net.createConnection(targetPort, targetIp);
-			sockets.add(vmSocket);
-
-			clientSocket.pipe(vmSocket);
-			vmSocket.pipe(clientSocket);
-
-			clientSocket.on("error", () => {
-				vmSocket.destroy();
-				sockets.delete(clientSocket);
-				sockets.delete(vmSocket);
+		try {
+			const server = Bun.listen<{ targetIp: string; targetPort: number }>({
+				hostname: "0.0.0.0",
+				port: localPort,
+				data: { targetIp, targetPort },
+				socket: {
+					open(clientSocket) {
+						// Connect to the VM
+						Bun.connect({
+							hostname: clientSocket.data.targetIp,
+							port: clientSocket.data.targetPort,
+							socket: {
+								data(_vmSocket, data) {
+									// Forward data from VM to client
+									clientSocket.write(data);
+								},
+								open(vmSocket) {
+									// Store the VM socket reference on the client socket
+									(
+										clientSocket as Socket<{
+											targetIp: string;
+											targetPort: number;
+											vmSocket?: Socket<unknown>;
+										}>
+									).data.vmSocket = vmSocket;
+								},
+								close() {
+									clientSocket.end();
+								},
+								error() {
+									clientSocket.end();
+								},
+							},
+						}).catch(() => {
+							clientSocket.end();
+						});
+					},
+					data(clientSocket, data) {
+						// Forward data from client to VM
+						const vmSocket = (
+							clientSocket as Socket<{
+								targetIp: string;
+								targetPort: number;
+								vmSocket?: Socket<unknown>;
+							}>
+						).data.vmSocket;
+						if (vmSocket) {
+							vmSocket.write(data);
+						}
+					},
+					close() {
+						// Connection closed
+					},
+					error() {
+						// Error on client socket
+					},
+				},
 			});
 
-			vmSocket.on("error", () => {
-				clientSocket.destroy();
-				sockets.delete(clientSocket);
-				sockets.delete(vmSocket);
-			});
-
-			clientSocket.on("close", () => {
-				vmSocket.destroy();
-				sockets.delete(clientSocket);
-				sockets.delete(vmSocket);
-			});
-
-			vmSocket.on("close", () => {
-				clientSocket.destroy();
-				sockets.delete(clientSocket);
-				sockets.delete(vmSocket);
-			});
-		});
-
-		server.on("error", reject);
-		server.listen(localPort, "0.0.0.0", () => {
 			proxies.set(vmId, server);
+			console.log(`[proxy] Started proxy on port ${localPort} -> ${targetIp}:${targetPort}`);
 			resolve();
-		});
+		} catch (err) {
+			reject(err);
+		}
 	});
 }
 
 export function stopProxy(vmId: string): void {
-	// Close all connections
-	const sockets = connections.get(vmId);
-	if (sockets) {
-		for (const socket of sockets) {
-			socket.destroy();
-		}
-		connections.delete(vmId);
-	}
-
-	// Close server
 	const server = proxies.get(vmId);
 	if (server) {
-		server.close();
+		server.stop();
 		proxies.delete(vmId);
 	}
 }
