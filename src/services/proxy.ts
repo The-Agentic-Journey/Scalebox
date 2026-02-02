@@ -50,6 +50,7 @@ export function startProxy(
 							socket: {
 								data(vmSocket, data) {
 									// Forward data from VM to client
+									log(`Received ${data.length} bytes from VM, forwarding to client`);
 									vmSocket.data.clientSocket.write(data);
 								},
 								open(vmSocket) {
@@ -86,10 +87,11 @@ export function startProxy(
 					data(clientSocket, data) {
 						// Forward data from client to VM
 						if (clientSocket.data.vmConnected && clientSocket.data.vmSocket) {
+							log(`Forwarding ${data.length} bytes from client to VM`);
 							clientSocket.data.vmSocket.write(data);
 						} else {
 							// Buffer data until VM connection is ready
-							log("Buffering client data until VM connected...");
+							log(`Buffering ${data.length} bytes from client until VM connected...`);
 							clientSocket.data.pendingData.push(new Uint8Array(data));
 						}
 					},

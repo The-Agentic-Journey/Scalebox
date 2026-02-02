@@ -299,19 +299,35 @@ do_check() {
       --command="cat /tmp/fc-$debug_vm_id-console.log 2>/dev/null || echo 'Console log not found'" \
       --quiet || echo "Failed to get console log"
 
-    echo "==> Debug: Checking if SSH is listening inside VM (via ss on host)..."
+    echo "==> Debug: Testing direct TCP connection to VM SSH port (using bash /dev/tcp)..."
     gcloud compute ssh "$VM_NAME" \
       --zone="$GCLOUD_ZONE" \
       --project="$GCLOUD_PROJECT" \
-      --command="timeout 5 bash -c 'echo | nc -w 2 $debug_vm_ip 22' 2>&1 || echo 'SSH port 22 not responding'" \
-      --quiet || echo "Failed to check SSH port"
+      --command="timeout 5 bash -c 'exec 3<>/dev/tcp/$debug_vm_ip/22 && cat <&3 & sleep 2; kill %1 2>/dev/null' 2>&1 || echo 'Direct TCP to port 22 failed'" \
+      --quiet || echo "Failed to test direct TCP"
+
+    echo "==> Debug: Testing SSH connection through proxy port..."
+    local debug_ssh_port=$(echo "$debug_vm_response" | jq -r '.ssh_port')
+    echo "==> SSH port: $debug_ssh_port"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$debug_ssh_port && cat <&3 & sleep 2; kill %1 2>/dev/null' 2>&1 || echo 'Proxy port connection failed'" \
+      --quiet || echo "Failed to test proxy port"
 
     echo "==> Debug: Checking scaleboxd logs for VM creation..."
     gcloud compute ssh "$VM_NAME" \
       --zone="$GCLOUD_ZONE" \
       --project="$GCLOUD_PROJECT" \
-      --command="journalctl -u scaleboxd -n 30 --no-pager | grep -E '$debug_vm_id|proxy|error' || echo 'No relevant logs'" \
+      --command="journalctl -u scaleboxd -n 50 --no-pager | grep -E '$debug_vm_id|proxy|error|listen|port' || echo 'No relevant logs'" \
       --quiet || echo "Failed to get logs"
+
+    echo "==> Debug: Checking listening ports on host..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="ss -tlnp | grep -E '$debug_ssh_port|scaleboxd' || echo 'Port not found in ss output'" \
+      --quiet || echo "Failed to get port info"
 
     echo "==> Debug: Deleting debug VM..."
     curl -s -X DELETE "https://$VM_FQDN/vms/$debug_vm_id" -H "Authorization: Bearer $token" || true
