@@ -252,6 +252,42 @@ ssh-keygen -A
 systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
+
+# Create diagnostic script that outputs SSH/network status to console
+cat > /usr/local/bin/scalebox-diag.sh <<'DIAGSCRIPT'
+#!/bin/bash
+echo "=== SCALEBOX DIAGNOSTICS ==="
+echo "--- Network Interfaces ---"
+ip addr
+echo "--- Listening Ports ---"
+ss -tlnp
+echo "--- SSH Service Status ---"
+systemctl status ssh.service --no-pager || true
+echo "--- SSH Config (ListenAddress) ---"
+grep -E "^#?ListenAddress" /etc/ssh/sshd_config || echo "No ListenAddress configured (default: all)"
+echo "--- Route Table ---"
+ip route
+echo "=== END DIAGNOSTICS ==="
+DIAGSCRIPT
+chmod +x /usr/local/bin/scalebox-diag.sh
+
+# Create systemd service to run diagnostics after network is up
+cat > /etc/systemd/system/scalebox-diag.service <<'DIAGSERVICE'
+[Unit]
+Description=Scalebox Diagnostics
+After=ssh.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/scalebox-diag.sh
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+DIAGSERVICE
+systemctl enable scalebox-diag.service
 CHROOT
 
   # Create ext4 image (use .tmp for atomic creation)
