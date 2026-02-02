@@ -221,10 +221,65 @@ check_gcloud_project() {
 
 check_firewall_rule() {
   echo "==> Checking firewall rule..."
-  if ! gcloud compute firewall-rules describe scalebox-test-allow \
-       --project="$GCLOUD_PROJECT" &>/dev/null; then
-    die "Firewall rule 'scalebox-test-allow' not found. Create it first (see Phase 0 in PLAN-SCALEBOX.md)"
+
+  # Get the firewall rule configuration
+  local rule_config
+  rule_config=$(gcloud compute firewall-rules describe scalebox-test-allow \
+    --project="$GCLOUD_PROJECT" \
+    --format='value(allowed)' 2>/dev/null) || true
+
+  if [[ -z "$rule_config" ]]; then
+    echo ""
+    echo "Firewall rule 'scalebox-test-allow' not found."
+    echo "Create it with:"
+    echo ""
+    echo "  gcloud compute firewall-rules create scalebox-test-allow \\"
+    echo "    --project=$GCLOUD_PROJECT \\"
+    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000 \\"
+    echo "    --target-tags=scalebox-test \\"
+    echo "    --description='Allow traffic to Scalebox test VMs'"
+    echo ""
+    die "Firewall rule not found"
   fi
+
+  echo "==> Firewall rule allows: $rule_config"
+
+  # Check for required ports
+  local missing_ports=()
+
+  # Check for HTTPS (443)
+  if [[ "$rule_config" != *"443"* ]]; then
+    missing_ports+=("tcp:443 (HTTPS)")
+  fi
+
+  # Check for HTTP API (8080)
+  if [[ "$rule_config" != *"8080"* ]]; then
+    missing_ports+=("tcp:8080 (HTTP API)")
+  fi
+
+  # Check for SSH proxy ports (22001-32000)
+  # The rule should contain either "22001" or a range like "22000-32000"
+  if [[ "$rule_config" != *"22001"* && "$rule_config" != *"22000-"* ]]; then
+    missing_ports+=("tcp:22001-32000 (SSH proxy)")
+  fi
+
+  if [[ ${#missing_ports[@]} -gt 0 ]]; then
+    echo ""
+    echo "ERROR: Firewall rule is missing required ports:"
+    for port in "${missing_ports[@]}"; do
+      echo "  - $port"
+    done
+    echo ""
+    echo "Update the firewall rule with:"
+    echo ""
+    echo "  gcloud compute firewall-rules update scalebox-test-allow \\"
+    echo "    --project=$GCLOUD_PROJECT \\"
+    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000"
+    echo ""
+    die "Firewall rule misconfigured"
+  fi
+
+  echo "==> Firewall rule OK"
 }
 
 do_check() {

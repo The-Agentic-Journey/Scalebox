@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { $ } from "bun";
 
@@ -13,6 +13,8 @@ const API_TOKEN = process.env.API_TOKEN || "dev-token";
 
 // SSH
 export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
+// Fix permissions for SSH key - git stores as 644 but SSH requires 600
+chmodSync(TEST_PRIVATE_KEY_PATH, 0o600);
 export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
 
 // API client
@@ -50,6 +52,7 @@ export const api = {
 export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<void> {
 	const start = Date.now();
 	let attempts = 0;
+	let lastError = "";
 	while (Date.now() - start < timeoutMs) {
 		attempts++;
 		const elapsed = Math.round((Date.now() - start) / 1000);
@@ -57,18 +60,22 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
 			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
 			console.log(`SSH ready on port ${sshPort} after ${elapsed}s (${attempts} attempts)`);
 			return;
-		} catch {
-			// Log progress every 30 seconds
-			if (attempts % 15 === 0) {
+		} catch (e) {
+			lastError = e instanceof Error ? e.message : String(e);
+			// Log progress every 30 seconds, or on last few attempts
+			const timeRemaining = timeoutMs - (Date.now() - start);
+			if (attempts % 15 === 0 || timeRemaining < 10000) {
 				console.log(
-					`SSH not ready on port ${sshPort} after ${elapsed}s (${attempts} attempts), retrying...`,
+					`SSH not ready on port ${sshPort} after ${elapsed}s (${attempts} attempts), error: ${lastError.slice(0, 200)}`,
 				);
 			}
 			await Bun.sleep(2000);
 		}
 	}
 	const elapsed = Math.round((Date.now() - start) / 1000);
-	throw new Error(`SSH not ready on port ${sshPort} within ${elapsed}s (${attempts} attempts)`);
+	throw new Error(
+		`SSH not ready on port ${sshPort} within ${elapsed}s (${attempts} attempts). Last error: ${lastError}`,
+	);
 }
 
 export async function sshExec(sshPort: number, command: string): Promise<string> {
