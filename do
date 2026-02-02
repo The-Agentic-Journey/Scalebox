@@ -263,6 +263,46 @@ do_check() {
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
 
+  # Debug: Create a test VM and check if it boots properly
+  echo "==> Debug: Creating a test VM to check boot status..."
+  local debug_vm_response
+  debug_vm_response=$(curl -s -X POST "https://$VM_FQDN/vms" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d '{"template": "debian-base", "ssh_public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ test@test"}')
+  echo "==> Debug VM response: $debug_vm_response"
+  local debug_vm_id=$(echo "$debug_vm_response" | jq -r '.id')
+  local debug_vm_ip=$(echo "$debug_vm_response" | jq -r '.ip')
+
+  if [[ -n "$debug_vm_id" && "$debug_vm_id" != "null" ]]; then
+    echo "==> Debug: Waiting 10s for VM to boot..."
+    sleep 10
+
+    echo "==> Debug: Checking Firecracker process..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="ps aux | grep -E 'firecracker|$debug_vm_id' | grep -v grep || echo 'No firecracker process found'" \
+      --quiet || echo "Failed to check process"
+
+    echo "==> Debug: Checking VM network connectivity from host..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="ping -c 2 $debug_vm_ip || echo 'Ping failed'; nc -zv $debug_vm_ip 22 2>&1 || echo 'Port 22 not reachable'" \
+      --quiet || echo "Failed to check network"
+
+    echo "==> Debug: Checking scaleboxd logs for VM creation..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -u scaleboxd -n 30 --no-pager | grep -E '$debug_vm_id|proxy|error' || echo 'No relevant logs'" \
+      --quiet || echo "Failed to get logs"
+
+    echo "==> Debug: Deleting debug VM..."
+    curl -s -X DELETE "https://$VM_FQDN/vms/$debug_vm_id" -H "Authorization: Bearer $token" || true
+  fi
+
   echo "==> Running tests against https://$VM_FQDN..."
   if ! VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
     echo "==> Tests FAILED. Capturing debug info..."
