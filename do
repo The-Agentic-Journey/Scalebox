@@ -275,8 +275,8 @@ do_check() {
   local debug_vm_ip=$(echo "$debug_vm_response" | jq -r '.ip')
 
   if [[ -n "$debug_vm_id" && "$debug_vm_id" != "null" ]]; then
-    echo "==> Debug: Waiting 10s for VM to boot..."
-    sleep 10
+    echo "==> Debug: Waiting 30s for VM to boot..."
+    sleep 30
 
     echo "==> Debug: Checking Firecracker process..."
     gcloud compute ssh "$VM_NAME" \
@@ -289,8 +289,22 @@ do_check() {
     gcloud compute ssh "$VM_NAME" \
       --zone="$GCLOUD_ZONE" \
       --project="$GCLOUD_PROJECT" \
-      --command="ping -c 2 $debug_vm_ip || echo 'Ping failed'; nc -zv $debug_vm_ip 22 2>&1 || echo 'Port 22 not reachable'" \
+      --command="ping -c 2 $debug_vm_ip || echo 'Ping failed'" \
       --quiet || echo "Failed to check network"
+
+    echo "==> Debug: Checking Firecracker console log (VM boot output)..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="cat /tmp/fc-$debug_vm_id-console.log 2>/dev/null || echo 'Console log not found'" \
+      --quiet || echo "Failed to get console log"
+
+    echo "==> Debug: Checking if SSH is listening inside VM (via ss on host)..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="timeout 5 bash -c 'echo | nc -w 2 $debug_vm_ip 22' 2>&1 || echo 'SSH port 22 not responding'" \
+      --quiet || echo "Failed to check SSH port"
 
     echo "==> Debug: Checking scaleboxd logs for VM creation..."
     gcloud compute ssh "$VM_NAME" \
