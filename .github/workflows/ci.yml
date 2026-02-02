@@ -59,6 +59,14 @@ jobs:
         run: |
           gcloud compute firewall-rules describe scalebox-test-allow --project="$GCLOUD_PROJECT" || echo "Firewall rule not found"
 
+      - name: Test bun and lint
+        run: |
+          echo "Testing bun..."
+          which bun
+          bun --version
+          echo "Running lint only..."
+          ./do lint
+
       - name: Run CI (lint, build, test)
         env:
           GCLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
