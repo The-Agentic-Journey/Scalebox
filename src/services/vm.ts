@@ -98,8 +98,13 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 
 		// Start TCP proxy for SSH
 		console.log(`[${vmId}] Starting proxy on port ${port}...`);
-		await startProxy(vmId, port, ip, 22);
-		console.log(`[${vmId}] Proxy started successfully`);
+		try {
+			await startProxy(vmId, port, ip, 22);
+			console.log(`[${vmId}] Proxy started successfully`);
+		} catch (proxyError) {
+			console.error(`[${vmId}] PROXY FAILED TO START:`, proxyError);
+			throw proxyError;
+		}
 
 		// Create VM record
 		const vm: VM = {

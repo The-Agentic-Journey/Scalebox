@@ -2,27 +2,33 @@ import type { Socket, TCPSocketListener } from "bun";
 
 const proxies = new Map<string, TCPSocketListener<{ targetIp: string; targetPort: number }>>();
 
+function log(msg: string): void {
+	const line = `[proxy] ${msg}`;
+	console.log(line);
+	// Force flush to ensure logs appear immediately
+	Bun.write(Bun.stdout, `${line}\n`);
+}
+
 export function startProxy(
 	vmId: string,
 	localPort: number,
 	targetIp: string,
 	targetPort: number,
 ): Promise<void> {
-	console.log(
-		`[proxy] startProxy called: vmId=${vmId}, localPort=${localPort}, targetIp=${targetIp}, targetPort=${targetPort}`,
+	log(
+		`startProxy called: vmId=${vmId}, localPort=${localPort}, targetIp=${targetIp}, targetPort=${targetPort}`,
 	);
+	log(`Current proxy count before: ${proxies.size}`);
 	return new Promise((resolve, reject) => {
 		try {
-			console.log(`[proxy] Calling Bun.listen on port ${localPort}...`);
+			log(`Calling Bun.listen on port ${localPort}...`);
 			const server = Bun.listen<{ targetIp: string; targetPort: number }>({
 				hostname: "0.0.0.0",
 				port: localPort,
 				data: { targetIp, targetPort },
 				socket: {
 					open(clientSocket) {
-						console.log(
-							`[proxy] Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`,
-						);
+						log(`Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`);
 						// Connect to the VM
 						Bun.connect({
 							hostname: clientSocket.data.targetIp,
@@ -82,18 +88,15 @@ export function startProxy(
 			});
 
 			proxies.set(vmId, server);
-			console.log(
-				`[proxy] SUCCESS: Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`,
-			);
-			console.log("[proxy] Server object:", server);
+			log(`SUCCESS: Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`);
+			log(`Server hostname: ${server.hostname}, port: ${server.port}`);
+			log(`Current proxy count after: ${proxies.size}`);
+			log(`Active proxies: ${Array.from(proxies.keys()).join(", ")}`);
 			resolve();
 		} catch (err) {
-			console.error(`[proxy] ERROR: Bun.listen failed on port ${localPort}:`, err);
-			console.error("[proxy] Error type:", typeof err);
-			console.error(
-				"[proxy] Error details:",
-				JSON.stringify(err, Object.getOwnPropertyNames(err as object)),
-			);
+			log(`ERROR: Bun.listen failed on port ${localPort}: ${err}`);
+			log(`Error type: ${typeof err}`);
+			log(`Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
 			reject(err);
 		}
 	});
