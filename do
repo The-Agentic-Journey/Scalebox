@@ -12,13 +12,21 @@ KEEP_VM="${KEEP_VM:-false}"
 DNS_ZONE="${DNS_ZONE:-scalebox-dns}"
 DNS_SUFFIX="${DNS_SUFFIX:-testing.holderbaum.cloud}"
 
-# Local bun installation
+# Bun - use system bun if available, otherwise local installation
 BUN_DIR="$SCRIPT_DIR/.bun"
-BUN_BIN="$BUN_DIR/bin/bun"
+if command -v bun &>/dev/null; then
+  BUN_BIN="$(command -v bun)"
+else
+  BUN_BIN="$BUN_DIR/bin/bun"
+fi
 
 die() { echo "Error: $1" >&2; exit 1; }
 
 ensure_bun() {
+  if command -v bun &>/dev/null; then
+    echo "==> Using system bun: $(command -v bun)"
+    return 0
+  fi
   if [[ ! -x "$BUN_BIN" ]]; then
     echo "==> Installing bun locally..."
     BUN_INSTALL="$BUN_DIR" bash -c "$(curl -fsSL https://bun.sh/install)"
