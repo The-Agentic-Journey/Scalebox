@@ -263,6 +263,16 @@ do_check() {
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
 
+  echo "==> Debug: Checking proxy status on VM..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="systemctl status scaleboxd; ss -tlnp | grep -E '22[0-9]{3}'; curl -s localhost:8080/vms" \
+    --quiet || echo "Debug command failed"
+
+  echo "==> Debug: Testing direct SSH to VM port 22001..."
+  timeout 10 ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 22001 root@"$VM_FQDN" echo "SSH OK" 2>&1 || echo "Direct SSH test failed"
+
   echo "==> Running tests against https://$VM_FQDN..."
   VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
 
