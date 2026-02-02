@@ -8,7 +8,9 @@ export function startProxy(
 	targetIp: string,
 	targetPort: number,
 ): Promise<void> {
-	console.log(`[proxy] startProxy called: vmId=${vmId}, localPort=${localPort}, targetIp=${targetIp}, targetPort=${targetPort}`);
+	console.log(
+		`[proxy] startProxy called: vmId=${vmId}, localPort=${localPort}, targetIp=${targetIp}, targetPort=${targetPort}`,
+	);
 	return new Promise((resolve, reject) => {
 		try {
 			console.log(`[proxy] Calling Bun.listen on port ${localPort}...`);
@@ -18,7 +20,9 @@ export function startProxy(
 				data: { targetIp, targetPort },
 				socket: {
 					open(clientSocket) {
-						console.log(`[proxy] Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`);
+						console.log(
+							`[proxy] Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`,
+						);
 						// Connect to the VM
 						Bun.connect({
 							hostname: clientSocket.data.targetIp,
@@ -29,7 +33,9 @@ export function startProxy(
 									clientSocket.write(data);
 								},
 								open(vmSocket) {
-									console.log(`[proxy] Connected to VM at ${clientSocket.data.targetIp}:${clientSocket.data.targetPort}`);
+									console.log(
+										`[proxy] Connected to VM at ${clientSocket.data.targetIp}:${clientSocket.data.targetPort}`,
+									);
 									// Store the VM socket reference on the client socket
 									(
 										clientSocket as Socket<{
@@ -40,11 +46,11 @@ export function startProxy(
 									).data.vmSocket = vmSocket;
 								},
 								close() {
-									console.log(`[proxy] VM socket closed`);
+									console.log("[proxy] VM socket closed");
 									clientSocket.end();
 								},
-								error(vmSocket, err) {
-									console.error(`[proxy] VM socket error:`, err);
+								error(_vmSocket, err) {
+									console.error("[proxy] VM socket error:", err);
 									clientSocket.end();
 								},
 							},
@@ -67,22 +73,27 @@ export function startProxy(
 						}
 					},
 					close() {
-						console.log(`[proxy] Client socket closed`);
+						console.log("[proxy] Client socket closed");
 					},
 					error(_socket, err) {
-						console.error(`[proxy] Client socket error:`, err);
+						console.error("[proxy] Client socket error:", err);
 					},
 				},
 			});
 
 			proxies.set(vmId, server);
-			console.log(`[proxy] SUCCESS: Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`);
-			console.log(`[proxy] Server object:`, server);
+			console.log(
+				`[proxy] SUCCESS: Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`,
+			);
+			console.log("[proxy] Server object:", server);
 			resolve();
 		} catch (err) {
 			console.error(`[proxy] ERROR: Bun.listen failed on port ${localPort}:`, err);
-			console.error(`[proxy] Error type:`, typeof err);
-			console.error(`[proxy] Error details:`, JSON.stringify(err, Object.getOwnPropertyNames(err as object)));
+			console.error("[proxy] Error type:", typeof err);
+			console.error(
+				"[proxy] Error details:",
+				JSON.stringify(err, Object.getOwnPropertyNames(err as object)),
+			);
 			reject(err);
 		}
 	});
