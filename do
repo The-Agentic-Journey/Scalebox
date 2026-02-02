@@ -273,6 +273,13 @@ do_check() {
   echo "==> Debug: Testing direct SSH to VM port 22001..."
   timeout 10 ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 22001 root@"$VM_FQDN" echo "SSH OK" 2>&1 || echo "Direct SSH test failed"
 
+  echo "==> Debug: Recent scaleboxd logs..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="journalctl -u scaleboxd -n 50 --no-pager" \
+    --quiet || echo "Failed to get scaleboxd logs"
+
   echo "==> Running tests against https://$VM_FQDN..."
   VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
 
