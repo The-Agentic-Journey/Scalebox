@@ -204,6 +204,13 @@ do_test() {
   "$BUN_BIN" test "$@"
 }
 
+check_gcloud_project() {
+  if [[ -z "$GCLOUD_PROJECT" ]]; then
+    die "GCLOUD_PROJECT is not set. Set it via environment variable or 'gcloud config set project <project-id>'"
+  fi
+  echo "==> Using GCP project: $GCLOUD_PROJECT"
+}
+
 check_firewall_rule() {
   echo "==> Checking firewall rule..."
   if ! gcloud compute firewall-rules describe scalebox-test-allow \
@@ -217,6 +224,9 @@ do_check() {
 
   ensure_bun
   ensure_deps
+
+  # Verify GCP project is set before any gcloud commands
+  check_gcloud_project
 
   # Verify firewall rule exists before creating VM
   check_firewall_rule
