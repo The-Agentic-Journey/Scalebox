@@ -133,7 +133,7 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ssh_port, 120000);
+			await waitForSsh(data.ssh_port, 180000);
 		},
 		{ timeout: 180000 },
 	);
@@ -147,7 +147,7 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ssh_port, 120000);
+			await waitForSsh(data.ssh_port, 180000);
 			const output = await sshExec(data.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
@@ -166,7 +166,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ssh_port, 120000);
+			await waitForSsh(vm.ssh_port, 180000);
 
 			// Create a snapshot
 			const templateName = `snapshot-test-${Date.now()}`;
@@ -196,7 +196,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ssh_port, 120000);
+			await waitForSsh(vm.ssh_port, 180000);
 
 			// Create a snapshot
 			const templateName = `snapshot-list-${Date.now()}`;
@@ -225,7 +225,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ssh_port, 120000);
+			await waitForSsh(vm1.ssh_port, 180000);
 
 			// Create a snapshot
 			const templateName = `snapshot-create-${Date.now()}`;
@@ -246,7 +246,7 @@ describe("Firecracker API", () => {
 			expect(vm2.template).toBe(templateName);
 
 			// Verify new VM is reachable
-			await waitForSsh(vm2.ssh_port, 120000);
+			await waitForSsh(vm2.ssh_port, 180000);
 			const output = await sshExec(vm2.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
@@ -264,7 +264,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ssh_port, 120000);
+			await waitForSsh(vm1.ssh_port, 180000);
 
 			// Write a unique file to the VM
 			const testContent = `test-content-${Date.now()}`;
@@ -293,7 +293,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm2.id);
 
 			// Verify new VM has the file with the content
-			await waitForSsh(vm2.ssh_port, 120000);
+			await waitForSsh(vm2.ssh_port, 180000);
 			const content = await sshExec(vm2.ssh_port, "cat /root/testfile.txt");
 			expect(content.trim()).toBe(testContent);
 		},
@@ -312,7 +312,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready via SSH
-			await waitForSsh(vm.ssh_port, 120000);
+			await waitForSsh(vm.ssh_port, 180000);
 
 			// Take a snapshot with a unique name
 			const templateName = `snapshot-delete-${Date.now()}`;

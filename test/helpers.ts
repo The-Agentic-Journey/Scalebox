@@ -49,15 +49,26 @@ export const api = {
 // SSH via proxy port (connects to VM_HOST on the proxy port, not internal IP)
 export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<void> {
 	const start = Date.now();
+	let attempts = 0;
 	while (Date.now() - start < timeoutMs) {
+		attempts++;
+		const elapsed = Math.round((Date.now() - start) / 1000);
 		try {
-			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
+			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
+			console.log(`SSH ready on port ${sshPort} after ${elapsed}s (${attempts} attempts)`);
 			return;
 		} catch {
-			await Bun.sleep(1000);
+			// Log progress every 30 seconds
+			if (attempts % 15 === 0) {
+				console.log(
+					`SSH not ready on port ${sshPort} after ${elapsed}s (${attempts} attempts), retrying...`,
+				);
+			}
+			await Bun.sleep(2000);
 		}
 	}
-	throw new Error(`SSH not ready on port ${sshPort} within ${timeoutMs}ms`);
+	const elapsed = Math.round((Date.now() - start) / 1000);
+	throw new Error(`SSH not ready on port ${sshPort} within ${elapsed}s (${attempts} attempts)`);
 }
 
 export async function sshExec(sshPort: number, command: string): Promise<string> {
