@@ -252,10 +252,18 @@ grep -q "^ListenAddress" /etc/ssh/sshd_config || echo "ListenAddress 0.0.0.0" >>
 # Generate host keys
 ssh-keygen -A
 
-# Enable services
+# Enable services - explicitly disable ssh.socket to avoid socket activation issues
+# Socket activation can cause SSH to not respond if sshd spawn is delayed
+systemctl disable ssh.socket 2>/dev/null || true
 systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
+
+# Debug: Show SSH service configuration
+echo "=== SSH Service Debug ==="
+ls -la /lib/systemd/system/ssh* 2>/dev/null || echo "No ssh units in /lib/systemd/system"
+ls -la /etc/systemd/system/*.wants/ssh* 2>/dev/null || echo "No ssh units enabled"
+echo "=== End SSH Debug ==="
 
 # Create diagnostic script that outputs SSH/network status to console
 cat > /usr/local/bin/scalebox-diag.sh <<'DIAGSCRIPT'
