@@ -42,6 +42,18 @@ jobs:
           path: node_modules
           key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
 
+      - name: Debug environment
+        run: |
+          echo "GCLOUD_PROJECT: $GCLOUD_PROJECT"
+          echo "DNS_ZONE: $DNS_ZONE"
+          echo "DNS_SUFFIX: $DNS_SUFFIX"
+          gcloud config list
+          gcloud auth list
+
+      - name: Check firewall rule exists
+        run: |
+          gcloud compute firewall-rules describe scalebox-test-allow --project="$GCLOUD_PROJECT" || echo "Firewall rule not found"
+
       - name: Run CI (lint, build, test)
         env:
           GCLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
