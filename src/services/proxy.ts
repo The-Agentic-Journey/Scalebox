@@ -1,12 +1,18 @@
 import type { Socket, TCPSocketListener } from "bun";
 
-const proxies = new Map<string, TCPSocketListener<{ targetIp: string; targetPort: number }>>();
+interface ProxySocketData {
+	targetIp: string;
+	targetPort: number;
+	vmSocket?: Socket<{ clientSocket: Socket<ProxySocketData> }>;
+	pendingData: Uint8Array[];
+	vmConnected: boolean;
+}
+
+const proxies = new Map<string, TCPSocketListener<ProxySocketData>>();
 
 function log(msg: string): void {
 	const line = `[proxy] ${msg}`;
 	console.log(line);
-	// Force flush to ensure logs appear immediately
-	Bun.write(Bun.stdout, `${line}\n`);
 }
 
 export function startProxy(
@@ -22,67 +28,82 @@ export function startProxy(
 	return new Promise((resolve, reject) => {
 		try {
 			log(`Calling Bun.listen on port ${localPort}...`);
-			const server = Bun.listen<{ targetIp: string; targetPort: number }>({
+			const server = Bun.listen<ProxySocketData>({
 				hostname: "0.0.0.0",
 				port: localPort,
-				data: { targetIp, targetPort },
 				socket: {
 					open(clientSocket) {
 						log(`Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`);
+
+						// Initialize socket data with pending buffer
+						clientSocket.data = {
+							targetIp,
+							targetPort,
+							pendingData: [],
+							vmConnected: false,
+						};
+
 						// Connect to the VM
-						Bun.connect({
-							hostname: clientSocket.data.targetIp,
-							port: clientSocket.data.targetPort,
+						Bun.connect<{ clientSocket: Socket<ProxySocketData> }>({
+							hostname: targetIp,
+							port: targetPort,
 							socket: {
-								data(_vmSocket, data) {
+								data(vmSocket, data) {
 									// Forward data from VM to client
-									clientSocket.write(data);
+									vmSocket.data.clientSocket.write(data);
 								},
 								open(vmSocket) {
-									console.log(
-										`[proxy] Connected to VM at ${clientSocket.data.targetIp}:${clientSocket.data.targetPort}`,
-									);
-									// Store the VM socket reference on the client socket
-									(
-										clientSocket as Socket<{
-											targetIp: string;
-											targetPort: number;
-											vmSocket?: Socket<unknown>;
-										}>
-									).data.vmSocket = vmSocket;
+									log(`Connected to VM at ${targetIp}:${targetPort}`);
+									// Store reference to client socket
+									vmSocket.data = { clientSocket };
+									// Store VM socket reference and mark as connected
+									clientSocket.data.vmSocket = vmSocket;
+									clientSocket.data.vmConnected = true;
+
+									// Flush any pending data that arrived before VM connection
+									if (clientSocket.data.pendingData.length > 0) {
+										log(`Flushing ${clientSocket.data.pendingData.length} pending chunks to VM`);
+										for (const chunk of clientSocket.data.pendingData) {
+											vmSocket.write(chunk);
+										}
+										clientSocket.data.pendingData = [];
+									}
 								},
-								close() {
-									console.log("[proxy] VM socket closed");
-									clientSocket.end();
+								close(vmSocket) {
+									log("VM socket closed");
+									vmSocket.data.clientSocket.end();
 								},
-								error(_vmSocket, err) {
-									console.error("[proxy] VM socket error:", err);
-									clientSocket.end();
+								error(vmSocket, err) {
+									log(`VM socket error: ${err}`);
+									vmSocket.data.clientSocket.end();
 								},
 							},
 						}).catch((err) => {
-							console.error(`[proxy] Failed to connect to VM at ${targetIp}:${targetPort}:`, err);
+							log(`Failed to connect to VM at ${targetIp}:${targetPort}: ${err}`);
 							clientSocket.end();
 						});
 					},
 					data(clientSocket, data) {
 						// Forward data from client to VM
-						const vmSocket = (
-							clientSocket as Socket<{
-								targetIp: string;
-								targetPort: number;
-								vmSocket?: Socket<unknown>;
-							}>
-						).data.vmSocket;
-						if (vmSocket) {
-							vmSocket.write(data);
+						if (clientSocket.data.vmConnected && clientSocket.data.vmSocket) {
+							clientSocket.data.vmSocket.write(data);
+						} else {
+							// Buffer data until VM connection is ready
+							log("Buffering client data until VM connected...");
+							clientSocket.data.pendingData.push(new Uint8Array(data));
 						}
 					},
-					close() {
-						console.log("[proxy] Client socket closed");
+					close(clientSocket) {
+						log("Client socket closed");
+						if (clientSocket.data.vmSocket) {
+							clientSocket.data.vmSocket.end();
+						}
 					},
-					error(_socket, err) {
-						console.error("[proxy] Client socket error:", err);
+					error(clientSocket, err) {
+						log(`Client socket error: ${err}`);
+						if (clientSocket.data.vmSocket) {
+							clientSocket.data.vmSocket.end();
+						}
 					},
 				},
 			});
