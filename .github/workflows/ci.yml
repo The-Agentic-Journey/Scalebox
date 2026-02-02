@@ -42,6 +42,11 @@ jobs:
           path: node_modules
           key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Debug environment
         run: |
           echo "GCLOUD_PROJECT: $GCLOUD_PROJECT"
