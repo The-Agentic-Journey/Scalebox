@@ -263,25 +263,33 @@ do_check() {
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
 
-  echo "==> Debug: Checking proxy status on VM..."
-  gcloud compute ssh "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --command="systemctl status scaleboxd; ss -tlnp | grep -E '22[0-9]{3}'; curl -s localhost:8080/vms" \
-    --quiet || echo "Debug command failed"
-
-  echo "==> Debug: Testing direct SSH to VM port 22001..."
-  timeout 10 ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 22001 root@"$VM_FQDN" echo "SSH OK" 2>&1 || echo "Direct SSH test failed"
-
-  echo "==> Debug: Recent scaleboxd logs..."
-  gcloud compute ssh "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --command="journalctl -u scaleboxd -n 50 --no-pager" \
-    --quiet || echo "Failed to get scaleboxd logs"
-
   echo "==> Running tests against https://$VM_FQDN..."
-  VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
+  if ! VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
+    echo "==> Tests FAILED. Capturing debug info..."
+
+    echo "==> scaleboxd logs after test failure:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -u scaleboxd -n 100 --no-pager" \
+      --quiet || echo "Failed to get scaleboxd logs"
+
+    echo "==> Listening ports after test failure:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="ss -tlnp" \
+      --quiet || echo "Failed to get port info"
+
+    echo "==> Current VMs:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="curl -s localhost:8080/vms -H 'Authorization: Bearer $token'" \
+      --quiet || echo "Failed to get VMs"
+
+    exit 1
+  fi
 
   echo ""
   echo "==> All tests passed!"
