@@ -220,6 +220,12 @@ check_firewall_rule() {
 }
 
 do_check() {
+  echo "==> Starting do_check..."
+  echo "==> SCRIPT_DIR: $SCRIPT_DIR"
+  echo "==> BUN_DIR: $BUN_DIR"
+  echo "==> BUN_BIN: $BUN_BIN"
+  echo "==> Checking if bun exists: $(ls -la $BUN_BIN 2>&1 || echo 'NOT FOUND')"
+
   trap cleanup EXIT
 
   ensure_bun
