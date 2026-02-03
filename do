@@ -11,6 +11,8 @@ VM_IP=""
 KEEP_VM="${KEEP_VM:-false}"
 DNS_ZONE="${DNS_ZONE:-scalebox-dns}"
 DNS_SUFFIX="${DNS_SUFFIX:-testing.holderbaum.cloud}"
+GCS_BUCKET="${GCS_BUCKET:-scalebox-test-artifacts}"
+GCS_TARBALL_PATH=""
 
 # Bun - use system bun if available, otherwise local installation
 BUN_DIR="$SCRIPT_DIR/.bun"
@@ -41,6 +43,7 @@ ensure_deps() {
 }
 
 cleanup() {
+  delete_tarball
   delete_dns_record
   if [[ -n "$VM_NAME" && "$KEEP_VM" != "true" ]]; then
     echo "==> Deleting VM: $VM_NAME"
@@ -48,6 +51,45 @@ cleanup() {
       --zone="$GCLOUD_ZONE" \
       --project="$GCLOUD_PROJECT" \
       --quiet 2>/dev/null || true
+  fi
+}
+
+ensure_gcs_bucket() {
+  # Create bucket if it doesn't exist (ignore error if already exists)
+  if ! gcloud storage buckets describe "gs://$GCS_BUCKET" --project="$GCLOUD_PROJECT" &>/dev/null; then
+    echo "==> Creating GCS bucket: $GCS_BUCKET"
+    gcloud storage buckets create "gs://$GCS_BUCKET" \
+      --project="$GCLOUD_PROJECT" \
+      --location="us-central1" \
+      --uniform-bucket-level-access 2>/dev/null || true
+  fi
+
+  # Always ensure public read access (idempotent operation)
+  # This handles both new buckets and existing buckets that may lack the permission
+  echo "==> Ensuring GCS bucket has public read access..."
+  gcloud storage buckets add-iam-policy-binding "gs://$GCS_BUCKET" \
+    --member="allUsers" \
+    --role="roles/storage.objectViewer" \
+    --project="$GCLOUD_PROJECT" 2>/dev/null || true
+}
+
+upload_tarball() {
+  local tarball=$1
+  GCS_TARBALL_PATH="scalebox-test-$(date +%s)-$$.tar.gz"
+
+  echo "==> Uploading tarball to GCS..."
+  gcloud storage cp "$tarball" "gs://$GCS_BUCKET/$GCS_TARBALL_PATH" \
+    --project="$GCLOUD_PROJECT"
+
+  # Return the public URL
+  echo "https://storage.googleapis.com/$GCS_BUCKET/$GCS_TARBALL_PATH"
+}
+
+delete_tarball() {
+  if [[ -n "$GCS_TARBALL_PATH" ]]; then
+    echo "==> Deleting tarball from GCS..."
+    gcloud storage rm "gs://$GCS_BUCKET/$GCS_TARBALL_PATH" \
+      --project="$GCLOUD_PROJECT" 2>/dev/null || true
   fi
 }
 
