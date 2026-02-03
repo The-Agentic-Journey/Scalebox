@@ -419,15 +419,57 @@ do_check() {
   echo "==> Linting..."
   do_lint
 
-  echo "==> Building..."
-  do_build
+  echo "==> Building and creating tarball..."
+  do_tarball
+
+  echo "==> Ensuring GCS bucket exists..."
+  ensure_gcs_bucket
+
+  echo "==> Uploading tarball to GCS..."
+  local tarball_url
+  tarball_url=$(upload_tarball "scalebox-test.tar.gz")
+  echo "==> Tarball URL: $tarball_url"
 
   echo "==> Creating test VM..."
   create_vm
   wait_for_ssh
   create_dns_record
-  echo "==> Provisioning VM..."
-  API_DOMAIN="$VM_FQDN" provision_vm
+
+  echo "==> Running bootstrap.sh (interactive)..."
+  if ! provision_vm_bootstrap "$tarball_url"; then
+    echo "==> Bootstrap FAILED. Capturing debug info..."
+
+    echo "==> Bootstrap output from VM:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="cat /tmp/bootstrap.log 2>/dev/null || echo 'No bootstrap log found'" \
+      --quiet || true
+
+    echo "==> System logs:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -n 50 --no-pager" \
+      --quiet || true
+
+    exit 1
+  fi
+
+  echo "==> Verifying scaleboxd is running..."
+  if ! gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="systemctl is-active scaleboxd" \
+    --quiet; then
+    echo "==> scaleboxd not running. Bootstrap may have failed partially."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -u scaleboxd -n 50 --no-pager" \
+      --quiet || true
+    exit 1
+  fi
 
   echo "==> Getting API token..."
   local token
