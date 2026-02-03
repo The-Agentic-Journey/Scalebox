@@ -269,6 +269,8 @@ do_build() {
   cp scripts/install.sh builds/
   cp scripts/scalebox builds/
   cp scripts/scaleboxd.service builds/
+  cp scripts/scalebox-update builds/
+  chmod +x builds/scalebox-update
 
   chmod +x builds/scaleboxd builds/scalebox builds/install.sh
 
