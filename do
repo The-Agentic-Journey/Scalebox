@@ -168,6 +168,73 @@ provision_vm() {
     --quiet
 }
 
+provision_vm_bootstrap() {
+  local tarball_url=$1
+
+  echo "==> Copying bootstrap.sh to VM..."
+  gcloud compute scp scripts/bootstrap.sh "$VM_NAME:/tmp/bootstrap.sh" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --quiet
+
+  echo "==> Creating expect script..."
+  # Write expect script to local temp file to avoid quoting issues
+  # Note: $tarball_url and $VM_FQDN are interpolated here (bash heredoc)
+  # VM_FQDN is set by create_dns_record() which runs before this function
+  local expect_script="/tmp/bootstrap-expect-$$.exp"
+  cat > "$expect_script" <<EXPECT_EOF
+#!/usr/bin/expect -f
+set timeout 900
+log_user 1
+
+spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' bash /tmp/bootstrap.sh"
+
+expect {
+    "Enter API domain (or press Enter to skip HTTPS): " {
+        send "$VM_FQDN\r"
+        exp_continue
+    }
+    "Enter VM domain (optional, press Enter to skip): " {
+        send "\r"
+        exp_continue
+    }
+    timeout {
+        puts "ERROR: Timeout waiting for prompt"
+        exit 1
+    }
+    eof
+}
+
+# Capture exit code from spawned process
+catch wait result
+set exit_code [lindex \$result 3]
+if {\$exit_code != 0} {
+    puts "ERROR: Bootstrap exited with code \$exit_code"
+}
+exit \$exit_code
+EXPECT_EOF
+
+  echo "==> Copying expect script to VM..."
+  gcloud compute scp "$expect_script" "$VM_NAME:/tmp/bootstrap.exp" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --quiet
+  rm -f "$expect_script"
+
+  echo "==> Installing expect on VM..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo apt-get update -qq && sudo apt-get install -y -qq expect" \
+    --quiet
+
+  echo "==> Running bootstrap.sh with interactive prompts..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="chmod +x /tmp/bootstrap.exp && /tmp/bootstrap.exp"
+}
+
 get_api_token() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
