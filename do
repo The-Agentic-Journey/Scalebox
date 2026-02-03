@@ -200,6 +200,19 @@ do_build() {
   ls -la builds/
 }
 
+do_tarball() {
+  do_build
+
+  echo "==> Creating tarball..."
+  local tarball="scalebox-test.tar.gz"
+
+  # Create tarball from builds/ directory (same structure as release)
+  tar -czf "$tarball" -C builds .
+
+  echo "==> Created $tarball"
+  ls -la "$tarball"
+}
+
 do_lint() {
   ensure_bun
   ensure_deps
@@ -348,6 +361,7 @@ do_check() {
 
 case "${1:-help}" in
   build) do_build ;;
+  tarball) do_tarball ;;
   lint) do_lint ;;
   test) shift; do_test "$@" ;;
   check)
@@ -363,6 +377,7 @@ Usage: ./do <command>
 
 Commands:
   build              Build scaleboxd binary and copy scripts to builds/
+  tarball            Build and create scalebox-test.tar.gz (same structure as releases)
   lint               Run linter
   test               Run tests locally (requires VM_HOST and API_TOKEN)
   check              Full CI: lint, build, create VM, provision, test, cleanup
