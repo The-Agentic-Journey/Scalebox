@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+REPO="The-Agentic-Journey/Scalebox"
 GCLOUD_ZONE="${GCLOUD_ZONE:-us-central1-a}"
 GCLOUD_PROJECT="${GCLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || echo '')}"
 VM_NAME=""
@@ -245,6 +246,11 @@ delete_dns_record() {
   fi
 }
 
+get_last_release_url() {
+  local api_url="https://api.github.com/repos/$REPO/releases/latest"
+  curl -sSL "$api_url" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | .browser_download_url' | head -1
+}
+
 # === Commands ===
 
 do_build() {
@@ -477,6 +483,76 @@ do_check() {
   echo "==> All tests passed!"
 }
 
+do_check_update() {
+  trap cleanup EXIT
+
+  ensure_bun
+  ensure_deps
+  check_gcloud_project
+  check_firewall_rule
+
+  # Check for previous release
+  echo "==> Fetching last release URL..."
+  local old_release_url
+  old_release_url=$(get_last_release_url 2>/dev/null || echo "")
+
+  if [[ -z "$old_release_url" || "$old_release_url" == "null" ]]; then
+    echo "==> No previous release found on GitHub"
+    echo "==> Skipping upgrade test (expected for first release)"
+    echo "==> check-update: SKIPPED"
+    exit 0
+  fi
+
+  echo "==> Will bootstrap with last release: $old_release_url"
+
+  echo "==> Building current tarball..."
+  do_tarball
+
+  ensure_gcs_bucket
+
+  echo "==> Creating test VM..."
+  create_vm
+  wait_for_ssh
+  create_dns_record
+
+  # Bootstrap with LAST RELEASE (the old version)
+  echo "==> Running bootstrap with LAST RELEASE..."
+  provision_vm_bootstrap "$old_release_url"
+
+  echo "==> Verifying initial install..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="systemctl is-active scaleboxd"
+
+  # Upload CURRENT BUILD for update
+  echo "==> Uploading current build for update..."
+  local update_url
+  update_url=$(upload_tarball "scalebox-test.tar.gz")
+
+  echo "==> Running scalebox-update (last release → current build)..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo SCALEBOX_RELEASE_URL='$update_url' scalebox-update"
+
+  echo "==> Verifying update succeeded..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="curl -sf http://localhost:8080/health"
+
+  # Run full test suite against updated system
+  echo "==> Getting API token..."
+  local token
+  token=$(get_api_token)
+
+  echo "==> Running integration tests against updated system..."
+  VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
+
+  echo "==> check-update: PASSED (last release → current build)"
+}
+
 # === Main ===
 
 case "${1:-help}" in
@@ -488,6 +564,11 @@ case "${1:-help}" in
     shift || true
     [[ "${1:-}" == "--keep-vm" ]] && KEEP_VM=true
     do_check
+    ;;
+  check-update)
+    shift || true
+    [[ "${1:-}" == "--keep-vm" ]] && KEEP_VM=true
+    do_check_update
     ;;
   help|*)
     cat <<'EOF'
@@ -502,6 +583,8 @@ Commands:
   test               Run tests locally (requires VM_HOST and API_TOKEN)
   check              Full CI: lint, build, create VM, provision, test, cleanup
   check --keep-vm    Same but keep VM for debugging
+  check-update       Test upgrade from last GitHub release to current build
+  check-update --keep-vm  Same but keep VM for debugging
 
 Environment:
   GCLOUD_ZONE        GCE zone (default: us-central1-a)
