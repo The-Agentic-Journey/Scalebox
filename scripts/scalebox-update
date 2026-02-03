@@ -93,9 +93,14 @@ install_new() {
   fi
 }
 
-restart_service() {
-  log "Restarting scaleboxd..."
-  systemctl restart scaleboxd
+stop_service() {
+  log "Stopping scaleboxd..."
+  systemctl stop scaleboxd
+}
+
+start_service() {
+  log "Starting scaleboxd..."
+  systemctl start scaleboxd
 }
 
 health_check() {
@@ -115,8 +120,9 @@ health_check() {
 rollback() {
   log "Rolling back to previous version..."
   if [[ -f "${SCALEBOXD_BIN}.prev" ]]; then
+    systemctl stop scaleboxd 2>/dev/null || true
     cp "${SCALEBOXD_BIN}.prev" "$SCALEBOXD_BIN"
-    systemctl restart scaleboxd
+    systemctl start scaleboxd
     if health_check; then
       log "Rollback successful"
     else
@@ -150,8 +156,9 @@ main() {
 
   # Perform update with rollback on failure
   backup_current
+  stop_service
   install_new "$temp_dir"
-  restart_service
+  start_service
 
   if health_check; then
     cleanup
