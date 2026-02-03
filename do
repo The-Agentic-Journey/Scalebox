@@ -122,7 +122,7 @@ provision_vm() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="sudo DOMAIN='$DOMAIN' bash /opt/scalebox/install.sh" \
+    --command="sudo API_DOMAIN='$API_DOMAIN' bash /opt/scalebox/install.sh" \
     --quiet
 }
 
@@ -130,7 +130,7 @@ get_api_token() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2-" \
+    --command="sudo grep API_TOKEN /etc/scaleboxd/config | cut -d= -f2-" \
     --quiet
 }
 
@@ -305,7 +305,7 @@ do_check() {
   wait_for_ssh
   create_dns_record
   echo "==> Provisioning VM..."
-  DOMAIN="$VM_FQDN" provision_vm
+  API_DOMAIN="$VM_FQDN" provision_vm
 
   echo "==> Getting API token..."
   local token
