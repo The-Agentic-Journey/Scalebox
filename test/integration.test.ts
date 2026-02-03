@@ -1,10 +1,26 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { API_BASE_URL, TEST_PUBLIC_KEY, api, sshExec, waitForSsh } from "./helpers";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+	API_BASE_URL,
+	TEST_PUBLIC_KEY,
+	api,
+	cleanupCli,
+	initCli,
+	sshExec,
+	waitForSsh,
+} from "./helpers";
 
 describe("Firecracker API", () => {
 	// === Test Helpers & Cleanup ===
 	const createdVmIds: string[] = [];
 	const createdTemplates: string[] = [];
+
+	beforeAll(async () => {
+		await initCli();
+	});
+
+	afterAll(async () => {
+		await cleanupCli();
+	});
 
 	afterEach(async () => {
 		// Clean up VMs first, then templates
