@@ -71,6 +71,16 @@ app.post("/vms", async (c) => {
 	try {
 		return await withVmCreationLock(async () => {
 			const body = await c.req.json();
+
+			if (body.disk_size_gib !== undefined) {
+				if (body.disk_size_gib < 1 || body.disk_size_gib > config.maxDiskSizeGib) {
+					return c.json(
+						{ error: `disk_size_gib must be between 1 and ${config.maxDiskSizeGib}` },
+						400,
+					);
+				}
+			}
+
 			const vm = await createVm(body);
 			await updateCaddyConfig();
 			return c.json(vmToResponse(vm), 201);

@@ -29,6 +29,7 @@ export interface CreateVMRequest {
 	ssh_public_key: string;
 	vcpu_count?: number;
 	mem_size_mib?: number;
+	disk_size_gib?: number; // defaults to template size
 }
 
 export interface SnapshotRequest {

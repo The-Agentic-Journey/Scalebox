@@ -22,11 +22,13 @@ import {
 } from "./network";
 import { startProxy, stopProxy } from "./proxy";
 import {
+	checkAvailableSpace,
 	clearAuthorizedKeys,
 	copyRootfs,
 	copyRootfsToTemplate,
 	deleteRootfs,
 	injectSshKey,
+	resizeRootfs,
 } from "./storage";
 
 // In-memory VM state
@@ -60,6 +62,10 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		throw { status: 400, message: "Invalid template name" };
 	}
 
+	// Pre-flight space check
+	const diskSizeGib = req.disk_size_gib || config.defaultDiskSizeGib;
+	await checkAvailableSpace(diskSizeGib);
+
 	const name = req.name || generateUniqueName();
 	const vmId = generateVmId();
 	const ip = allocateIp();
@@ -74,6 +80,13 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		// Copy rootfs from template
 		console.log(`[${vmId}] Copying rootfs from template ${req.template}...`);
 		rootfsPath = await copyRootfs(req.template, vmId);
+
+		// Resize if custom size requested
+		// Only resize if larger than base template
+		if (diskSizeGib > 2) {
+			console.log(`[${vmId}] Resizing rootfs to ${diskSizeGib}GB...`);
+			await resizeRootfs(rootfsPath, diskSizeGib);
+		}
 
 		// Inject SSH key
 		console.log(`[${vmId}] Injecting SSH key...`);

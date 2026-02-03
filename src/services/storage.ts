@@ -105,3 +105,29 @@ export async function clearAuthorizedKeys(rootfsPath: string): Promise<void> {
 		}
 	}
 }
+
+export async function resizeRootfs(rootfsPath: string, sizeGib: number): Promise<void> {
+	// Expand the sparse file
+	await $`truncate -s ${sizeGib}G ${rootfsPath}`;
+
+	// Check and resize the ext4 filesystem
+	await $`e2fsck -f -y ${rootfsPath}`.quiet().nothrow();
+	await $`resize2fs ${rootfsPath}`.quiet();
+}
+
+export async function getAvailableSpaceGib(): Promise<number> {
+	const result = await $`df -BG ${config.dataDir} --output=avail | tail -1`.text();
+	return Number.parseInt(result.replace("G", "").trim());
+}
+
+export async function checkAvailableSpace(requiredGib: number): Promise<void> {
+	const available = await getAvailableSpaceGib();
+	const buffer = 2; // Keep 2GB buffer
+
+	if (available < requiredGib + buffer) {
+		throw {
+			status: 507, // Insufficient Storage
+			message: `Insufficient storage: ${available}GB available, need ${requiredGib + buffer}GB`,
+		};
+	}
+}
