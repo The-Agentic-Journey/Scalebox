@@ -292,6 +292,7 @@ cmd_login() {
   fi
 
   # Create config directory with secure permissions
+  # Note: mkdir -p creates parent dirs (e.g., ~/.config) if they don't exist
   mkdir -p "$SCALEBOX_CONFIG_DIR"
   chmod 700 "$SCALEBOX_CONFIG_DIR"
 
@@ -367,6 +368,7 @@ cmd_vm_list() {
   need_config
   local response
   if response=$(api GET /vms); then
+    # Note: adds .name column (not in old scalebox CLI which showed: id, template, ip, ssh_port)
     echo "$response" | output_table '.vms[] | [.name, .id, .template, .ip, .ssh_port] | @tsv'
   else
     echo "$response"
@@ -880,7 +882,10 @@ rm -rf /tmp/sb-test
 
 ### Modify: `do`
 
-Update the `do_build()` function:
+Update the `do_build()` function. Key changes:
+- Replace `cp scripts/scalebox builds/` with `cp scripts/sb builds/`
+- Add `cp scripts/install-sb.sh builds/`
+- Update chmod to reference `sb` instead of `scalebox`
 
 ```bash
 do_build() {
@@ -901,13 +906,14 @@ do_build() {
   # Verify binary was created
   [[ -f builds/scaleboxd ]] || die "Failed to compile scaleboxd"
 
-  # Copy scripts
+  # Copy scripts (sb replaces scalebox)
   cp scripts/install.sh builds/
   cp scripts/install-sb.sh builds/
   cp scripts/sb builds/
   cp scripts/scaleboxd.service builds/
+  cp scripts/scalebox-update builds/
 
-  chmod +x builds/scaleboxd builds/sb builds/install.sh builds/install-sb.sh
+  chmod +x builds/scaleboxd builds/sb builds/install.sh builds/install-sb.sh builds/scalebox-update
 
   echo "==> Build complete"
   ls -la builds/
@@ -919,7 +925,84 @@ do_build() {
 ```bash
 ./do build
 ls builds/
-# Should show: scaleboxd, sb, install.sh, install-sb.sh, scaleboxd.service
+# Should show: scaleboxd, sb, install.sh, install-sb.sh, scaleboxd.service, scalebox-update
+```
+
+---
+
+## Phase 4.5: Update scalebox-update Script
+
+**Goal**: Update `scalebox-update` to install `sb` CLI with backward-compatible `scalebox` symlink.
+
+### Modify: `scripts/scalebox-update`
+
+Update constants at the top:
+
+```bash
+SCALEBOX_CLI="/usr/local/bin/scalebox"
+```
+
+becomes:
+
+```bash
+SB_CLI="/usr/local/bin/sb"
+SCALEBOX_CLI="/usr/local/bin/scalebox"  # Backward compat symlink
+```
+
+Update `download_release()` to check for `sb`:
+
+```bash
+download_release() {
+  local url=$1
+  local temp_dir=$2
+
+  log "Downloading: $url"
+  curl -sSL "$url" | tar -xz -C "$temp_dir"
+
+  # Verify required files exist
+  [[ -f "$temp_dir/scaleboxd" ]] || die "scaleboxd not found in release"
+  [[ -f "$temp_dir/sb" ]] || die "sb not found in release"
+  [[ -f "$temp_dir/scaleboxd.service" ]] || die "scaleboxd.service not found in release"
+}
+```
+
+Update `install_new()` to install `sb` and create symlink:
+
+```bash
+install_new() {
+  local temp_dir=$1
+
+  log "Installing new scaleboxd..."
+  cp "$temp_dir/scaleboxd" "$SCALEBOXD_BIN"
+  chmod +x "$SCALEBOXD_BIN"
+
+  log "Installing new sb CLI..."
+  cp "$temp_dir/sb" "$SB_CLI"
+  chmod +x "$SB_CLI"
+
+  # Backward compatibility symlink
+  ln -sf "$SB_CLI" "$SCALEBOX_CLI"
+
+  # Update scalebox-update itself
+  if [[ -f "$temp_dir/scalebox-update" ]]; then
+    log "Installing new scalebox-update..."
+    cp "$temp_dir/scalebox-update" "/usr/local/bin/scalebox-update"
+    chmod +x "/usr/local/bin/scalebox-update"
+  fi
+
+  # Only update service file if different
+  if ! diff -q "$temp_dir/scaleboxd.service" "$SERVICE_FILE" &>/dev/null; then
+    log "Updating systemd service file..."
+    cp "$temp_dir/scaleboxd.service" "$SERVICE_FILE"
+    systemctl daemon-reload
+  fi
+}
+```
+
+### Verification
+
+```bash
+bash -n scripts/scalebox-update
 ```
 
 ---
@@ -1315,18 +1398,39 @@ rm scripts/scalebox
 
 ### Modify: `test/helpers.ts`
 
-Remove unused HTTP helper functions (keep only `api.getRaw` for auth tests):
+Remove unused HTTP helper functions. The `api` object is still needed for:
+- `api.getRaw()` - used by auth tests (tests 2, 3)
+- `api.delete()` - used by `afterEach` cleanup
 
 ```typescript
-// Remove these functions:
-// - api.get()
-// - api.post()
-// - api.delete()
+// KEEP these (still used):
+export const api = {
+  // Used by auth tests
+  async getRaw(path: string, token?: string) { ... },
+  // Used by afterEach cleanup
+  async delete(path: string) { ... },
+};
 
-// Keep these:
-// - api.getRaw() (for auth tests)
+// KEEP these (used by migrated tests):
 // - All CLI helpers (sbCmd, sbVmCreate, etc.)
 // - sshExec, waitForSsh (still used for SSH operations)
+
+// REMOVE these (no longer used after migration):
+// - api.get()
+// - api.post()
+```
+
+**Note**: The `afterEach` cleanup in `integration.test.ts` uses `api.delete()` for cleanup. Either keep `api.delete()` or migrate cleanup to use `sbVmDelete()` / `sbTemplateDelete()`.
+
+### Modify: `product/DDD/glossary.md`
+
+Update the Operations Terms section to reflect the CLI rename:
+
+```markdown
+### sb CLI
+The user-facing command-line tool for interacting with the Scalebox API. Named `sb` for brevity. A `scalebox` symlink is maintained for backward compatibility.
+
+**Note:** This is different from `scalebox-update`, which is a server-side administration tool.
 ```
 
 ### Verification
@@ -1347,10 +1451,12 @@ Remove unused HTTP helper functions (keep only `api.getRaw` for auth tests):
 | `scripts/sb` | Create | New CLI with login flow |
 | `scripts/install-sb.sh` | Create | User-level installer |
 | `scripts/scalebox` | Delete (Phase 7) | Replaced by sb |
+| `scripts/scalebox-update` | Modify | Install sb, create scalebox symlink |
 | `scripts/install.sh` | Modify | Install sb, create symlink |
 | `do` | Modify | Build sb instead of scalebox |
 | `test/helpers.ts` | Modify | Add CLI helpers, later remove unused HTTP helpers |
 | `test/integration.test.ts` | Modify | Migrate tests one at a time |
+| `product/DDD/glossary.md` | Modify | Update CLI terminology (scalebox → sb) |
 
 ---
 
@@ -1385,9 +1491,10 @@ Remove unused HTTP helper functions (keep only `api.getRaw` for auth tests):
 | 2 | `bash -n scripts/sb && ./scripts/sb help` | Valid bash, help shows |
 | 3 | `bash -n scripts/install-sb.sh` | Valid bash |
 | 4 | `./do build && ls builds/` | sb in builds/ |
+| 4.5 | `bash -n scripts/scalebox-update` | Valid bash |
 | 5 | `./do check` | All 19 tests pass (no changes to tests) |
 | 6.1-6.19 | `./do check` | All 19 tests pass (after each sub-phase) |
-| 7 | `./do check` | All tests pass, scalebox removed |
+| 7 | `./do check` | All tests pass, scalebox removed, glossary updated |
 
 ---
 
