@@ -105,6 +105,12 @@ configure() {
 
 # Get latest release URL
 get_latest_release() {
+  # Allow override for testing
+  if [[ -n "${SCALEBOX_RELEASE_URL:-}" ]]; then
+    echo "$SCALEBOX_RELEASE_URL"
+    return
+  fi
+
   local api_url="https://api.github.com/repos/$REPO/releases/latest"
   local download_url
 
