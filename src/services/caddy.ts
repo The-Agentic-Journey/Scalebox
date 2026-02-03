@@ -7,15 +7,15 @@ import { vms } from "./vm";
 const exec = promisify(execCallback);
 
 export async function updateCaddyConfig(): Promise<void> {
-	// Skip if baseDomain is not configured
-	if (!config.baseDomain) {
+	// Skip if vmDomain is not configured
+	if (!config.vmDomain) {
 		return;
 	}
 
 	// Build Caddyfile content
 	const vmRoutes = Array.from(vms.values())
 		.map((vm) => {
-			return `	@${vm.name} host ${vm.name}.${config.baseDomain}
+			return `	@${vm.name} host ${vm.name}.${config.vmDomain}
 	handle @${vm.name} {
 		reverse_proxy ${vm.ip}:8080
 	}`;
@@ -28,7 +28,7 @@ export async function updateCaddyConfig(): Promise<void> {
 	}
 }
 
-*.${config.baseDomain} {
+*.${config.vmDomain} {
 	tls {
 		on_demand
 	}

@@ -14,8 +14,8 @@ INSTALL_DIR="${INSTALL_DIR:-$SCRIPT_DIR}"
 DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
 API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
-DOMAIN="${DOMAIN:-}"
-BASE_DOMAIN="${BASE_DOMAIN:-}"
+API_DOMAIN="${API_DOMAIN:-}"
+VM_DOMAIN="${VM_DOMAIN:-}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
@@ -281,7 +281,7 @@ CHROOT
 
 # === Install Caddy (HTTPS reverse proxy) ===
 install_caddy() {
-  [[ -n "$DOMAIN" || -n "$BASE_DOMAIN" ]] || return 0
+  [[ -n "$API_DOMAIN" || -n "$VM_DOMAIN" ]] || return 0
 
   log "Installing Caddy..."
   apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
@@ -300,22 +300,22 @@ install_caddy() {
 CADDYEOF
 
   # Add main API domain if set
-  if [[ -n "$DOMAIN" ]]; then
-      log "Configuring Caddy for $DOMAIN..."
+  if [[ -n "$API_DOMAIN" ]]; then
+      log "Configuring Caddy for $API_DOMAIN..."
       cat >> /etc/caddy/Caddyfile <<EOF
 
-$DOMAIN {
+$API_DOMAIN {
     reverse_proxy localhost:$API_PORT
 }
 EOF
   fi
 
-  # Add wildcard for VM subdomains if BASE_DOMAIN is set
-  if [[ -n "$BASE_DOMAIN" ]]; then
-      log "Configuring Caddy for VM subdomains on $BASE_DOMAIN..."
+  # Add wildcard for VM subdomains if VM_DOMAIN is set
+  if [[ -n "$VM_DOMAIN" ]]; then
+      log "Configuring Caddy for VM subdomains on $VM_DOMAIN..."
       cat >> /etc/caddy/Caddyfile <<EOF
 
-*.$BASE_DOMAIN {
+*.$VM_DOMAIN {
     tls {
         on_demand
     }
@@ -333,19 +333,19 @@ EOF
 
 # === Wait for HTTPS Certificate ===
 wait_for_https() {
-  [[ -n "$DOMAIN" ]] || return 0
+  [[ -n "$API_DOMAIN" ]] || return 0
 
   log "Waiting for HTTPS certificate..."
   local retries=60
   while [[ $retries -gt 0 ]]; do
-    if curl -sf "https://$DOMAIN/health" &>/dev/null; then
+    if curl -sf "https://$API_DOMAIN/health" &>/dev/null; then
       log "HTTPS is ready"
       return 0
     fi
     sleep 2
     ((retries--)) || true
   done
-  die "Failed to obtain TLS certificate for $DOMAIN"
+  die "Failed to obtain TLS certificate for $API_DOMAIN"
 }
 
 # === Install Scalebox Binary ===
@@ -373,11 +373,11 @@ install_cli() {
 install_service() {
   log "Installing systemd service..."
 
-  mkdir -p /etc/scalebox
+  mkdir -p /etc/scaleboxd
 
   # Preserve existing token on reinstall, or generate new one
-  if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
-    API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+  if [[ -z "$API_TOKEN" && -f /etc/scaleboxd/config ]]; then
+    API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scaleboxd/config 2>/dev/null | cut -d= -f2- || true)
   fi
   [[ -z "$API_TOKEN" ]] && API_TOKEN="sb-$(openssl rand -hex 24)"
 
@@ -385,12 +385,12 @@ install_service() {
   # Use umask to prevent brief window where file is world-readable
   (
     umask 077
-    cat > /etc/scalebox/config <<EOF
+    cat > /etc/scaleboxd/config <<EOF
 API_PORT=$API_PORT
 API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
-BASE_DOMAIN=$BASE_DOMAIN
+VM_DOMAIN=$VM_DOMAIN
 EOF
   )
 
@@ -466,14 +466,14 @@ main() {
   echo ""
   log "Installation complete!"
   echo ""
-  if [[ -n "$DOMAIN" ]]; then
-    echo "  API: https://$DOMAIN"
+  if [[ -n "$API_DOMAIN" ]]; then
+    echo "  API: https://$API_DOMAIN"
   else
     echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
   fi
   echo "  Token: $API_TOKEN"
-  if [[ -n "$BASE_DOMAIN" ]]; then
-      echo "  VM URLs: https://{vm-name}.$BASE_DOMAIN"
+  if [[ -n "$VM_DOMAIN" ]]; then
+      echo "  VM URLs: https://{vm-name}.$VM_DOMAIN"
   fi
   echo ""
   echo "  Commands:"

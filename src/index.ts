@@ -20,12 +20,12 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 // Caddy on-demand TLS validation (no auth required)
 app.get("/caddy/check", (c) => {
 	const domain = c.req.query("domain");
-	if (!domain || !config.baseDomain) {
+	if (!domain || !config.vmDomain) {
 		return c.body(null, 404);
 	}
 
 	// Extract VM name from subdomain (e.g., "very-silly-penguin" from "very-silly-penguin.vms.example.com")
-	const suffix = `.${config.baseDomain}`;
+	const suffix = `.${config.vmDomain}`;
 	if (!domain.endsWith(suffix)) {
 		return c.body(null, 404);
 	}

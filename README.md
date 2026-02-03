@@ -1,198 +1,143 @@
 # Scalebox
 
-Firecracker microVM management with a simple REST API. Create VMs in seconds, access them via SSH or HTTPS.
+**Instant sandbox VMs for AI agents.**
 
-## One-Line Install
+Spin up isolated sandboxes from snapshots. Perfect for AI agents, CI runners, and dev environments.
+
+## Install
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/bootstrap.sh | sudo bash
 ```
 
-The installer will:
-- Prompt for your domain configuration
-- Install all dependencies (Firecracker, Caddy, etc.)
-- Set up networking and storage
-- Create a base Debian template
-- Start the API server
-- Display your API token
+The installer prompts for configuration and handles everything: Firecracker, networking, storage, and a base Debian template.
 
-**Requirements:** Debian/Ubuntu server with KVM support (bare metal or nested virtualization enabled).
+**Requirements:** Debian/Ubuntu with KVM support.
 
 ## Quick Start
 
-After installation, create your first VM:
-
 ```bash
-# Create a VM with your SSH key
+# Create a VM (boots in ~1 second)
 scalebox vm create -t debian-base -k "$(cat ~/.ssh/id_rsa.pub)"
+# → {"id": "vm-a1b2c3", "name": "happy-red-panda", "ssh_port": 22001, ...}
 
-# Output:
-# {
-#   "id": "vm-a1b2c3d4e5f6",
-#   "name": "happy-red-panda",
-#   "ip": "172.16.0.2",
-#   "ssh_port": 22001,
-#   ...
-# }
-
-# SSH into the VM
+# SSH into it
 ssh -p 22001 root@your-server
 
-# List all VMs
-scalebox vm list
+# Or access via HTTPS (if VM_DOMAIN configured)
+curl https://happy-red-panda.vms.example.com
 
-# Delete the VM
-scalebox vm delete vm-a1b2c3d4e5f6
+# Snapshot it as a new template
+scalebox vm snapshot vm-a1b2c3 -n my-configured-app
+
+# Spin up 10 identical VMs from that snapshot
+for i in {1..10}; do
+  scalebox vm create -t my-configured-app -k "$(cat ~/.ssh/id_rsa.pub)"
+done
+
+# Clean up
+scalebox vm delete vm-a1b2c3
 ```
 
-## What is Scalebox?
-
-Scalebox provides a REST API to create, manage, and snapshot Firecracker microVMs. Each VM:
-- Boots in ~1 second from copy-on-write templates
-- Gets a unique three-word name (e.g., `happy-red-panda`)
-- Is accessible via SSH through a proxy port
-- Can optionally be exposed via HTTPS at `https://{name}.{domain}`
-
-## Architecture
+## How It Works
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │            Host Server              │
-                    │                                     │
-  Internet ─────────┤ eth0 (public IP)                    │
-                    │   │                                 │
-                    │   ├─ :443 ─── Caddy (HTTPS proxy)   │
-                    │   │             *.domain → VM:8080  │
-                    │   │                                 │
-                    │   ├─ :8080 ── REST API (scaleboxd)  │
-                    │   │                                 │
-                    │   └─ :22xxx ─ TCP Proxy (SSH)       │
-                    │             :22001 → 172.16.0.2:22  │
-                    │             :22002 → 172.16.0.3:22  │
-                    │                                     │
-                    │ br0 (172.16.0.1/16)                 │
-                    │   ├── tap0 ── VM 1 (172.16.0.2)     │
-                    │   └── tap1 ── VM 2 (172.16.0.3)     │
-                    │                                     │
-                    │ /var/lib/scalebox/                  │
-                    │   ├── templates/   (btrfs)          │
-                    │   ├── vms/         (btrfs)          │
-                    │   └── kernel/                       │
-                    └─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                       Host Server                           │
+│                                                             │
+│  :443 ───── Caddy ───── HTTPS for API + VMs                 │
+│  :8080 ──── scaleboxd ─ REST API                            │
+│  :22xxx ─── TCP Proxy ─ SSH to VMs                          │
+│                                                             │
+│  br0 (172.16.0.1/16)                                        │
+│    ├── tap0 ── VM 1 (172.16.0.2) ── happy-red-panda         │
+│    ├── tap1 ── VM 2 (172.16.0.3) ── silly-blue-fox          │
+│    └── tap2 ── VM 3 (172.16.0.4) ── quick-green-owl         │
+│                                                             │
+│  /var/lib/scalebox/                                         │
+│    ├── templates/  ─ Golden images (btrfs, instant clone)   │
+│    └── vms/        ─ Running VM disks                       │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+VMs boot from copy-on-write clones of templates. Creating a VM = clone template + inject SSH key + start Firecracker. Takes ~1 second.
 
 ## Configuration
 
-The installer prompts for two optional domain settings:
+### Domains (optional)
 
-| Setting | Purpose | Example |
-|---------|---------|---------|
-| `DOMAIN` | HTTPS access to the API itself | `api.scalebox.example.com` |
-| `BASE_DOMAIN` | HTTPS access to VMs via subdomains | `vms.example.com` |
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `API_DOMAIN` | HTTPS for the Scalebox API | `scalebox.example.com` |
+| `VM_DOMAIN` | HTTPS for VMs (wildcard DNS required) | `vms.example.com` |
 
-**Without domains:** API is available at `http://server-ip:8080`, VMs via SSH only.
+Without domains, the API runs on `http://server:8080` and VMs are SSH-only.
 
-**With DOMAIN:** API gets automatic HTTPS via Let's Encrypt.
+### Config Files
 
-**With BASE_DOMAIN:** Each VM is accessible at `https://{vm-name}.{base-domain}` (port 8080 inside VM).
+The installer creates these automatically:
 
-### Configuration File
-
-Settings are stored in `/etc/scalebox/config`:
-
+**Daemon config** (`/etc/scaleboxd/config`):
 ```bash
 API_PORT=8080
-API_TOKEN=sb-...  # Auto-generated, save this!
+API_TOKEN=sb-xxx...  # Auto-generated, shown after install
 DATA_DIR=/var/lib/scalebox
-BASE_DOMAIN=vms.example.com
+VM_DOMAIN=vms.example.com
 ```
+
+**CLI config** (`~/.config/scalebox/config` or `/etc/scalebox/config`):
+```bash
+SCALEBOX_URL=https://scalebox.example.com
+SCALEBOX_TOKEN=sb-xxx...
+```
+
+The CLI searches: env vars → `~/.config/scalebox/config` → `/etc/scalebox/config`
 
 ## CLI Reference
 
 ```bash
-scalebox status                           # Health check
-scalebox vm list                          # List all VMs
-scalebox vm create -t TPL -k "KEY"        # Create VM from template
-scalebox vm get <id>                      # Get VM details
-scalebox vm delete <id>                   # Delete VM
-scalebox vm snapshot <id> -n NAME         # Snapshot VM to new template
-scalebox template list                    # List templates
-scalebox template delete <name>           # Delete template (not protected ones)
+scalebox status                        # Health check
+scalebox vm list                       # List all VMs
+scalebox vm create -t TPL -k "KEY"     # Create VM from template
+scalebox vm get <id>                   # Get VM details
+scalebox vm delete <id>                # Delete VM
+scalebox vm snapshot <id> -n NAME      # Snapshot VM to template
+scalebox template list                 # List templates
+scalebox template delete <name>        # Delete template
 ```
-
-**Environment variables:**
-- `SCALEBOX_URL` - API URL (default: `http://localhost:8080`)
-- `SCALEBOX_TOKEN` - API token (auto-reads from `/etc/scalebox/config`)
 
 ## REST API
 
-All endpoints except `/health` require `Authorization: Bearer <token>` header.
+All endpoints except `/health` require `Authorization: Bearer <token>`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check (no auth) |
+| GET | `/health` | Health check |
 | GET | `/templates` | List templates |
 | DELETE | `/templates/:name` | Delete template |
 | GET | `/vms` | List VMs |
 | POST | `/vms` | Create VM |
 | GET | `/vms/:id` | Get VM details |
 | DELETE | `/vms/:id` | Delete VM |
-| POST | `/vms/:id/snapshot` | Snapshot VM to template |
+| POST | `/vms/:id/snapshot` | Snapshot to template |
 
-### Create VM
-
-```bash
-curl -X POST https://api.example.com/vms \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "template": "debian-base",
-    "ssh_public_key": "ssh-rsa AAAA..."
-  }'
-```
-
-### Snapshot VM
+### Example: Create VM
 
 ```bash
-curl -X POST https://api.example.com/vms/vm-abc123/snapshot \
+curl -X POST https://scalebox.example.com/vms \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"template_name": "my-configured-app"}'
+  -d '{"template": "debian-base", "ssh_public_key": "ssh-rsa AAAA..."}'
 ```
 
 ## Development
 
-### Prerequisites
-
-- [Bun](https://bun.sh) runtime
-- Access to a host with KVM support
-
-### Commands
-
 ```bash
-./do lint      # Run linter
+./do lint      # Lint
 ./do build     # Build binary
-./do test      # Run tests (requires VM_HOST, API_TOKEN)
-./do check     # Full CI: lint, build, deploy to GCE, test
-```
-
-### Source Structure
-
-```
-src/
-├── index.ts              # HTTP routes (Hono framework)
-├── config.ts             # Environment configuration
-├── types.ts              # TypeScript types
-└── services/
-    ├── vm.ts             # VM lifecycle (core domain)
-    ├── template.ts       # Template management
-    ├── firecracker.ts    # Firecracker process control
-    ├── storage.ts        # Rootfs operations
-    ├── network.ts        # Bridge/TAP/IP allocation
-    ├── proxy.ts          # TCP proxy for SSH
-    └── caddy.ts          # HTTPS gateway config
+./do check     # Full CI: lint, build, test on GCE
 ```
 
 ## License
 
-See LICENSE file for details.
+See LICENSE file.

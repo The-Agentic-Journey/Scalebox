@@ -5,8 +5,8 @@
 # One-line install:
 #   curl -sSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/bootstrap.sh | sudo bash
 #
-# Or with domain pre-set:
-#   curl -sSL ... | sudo DOMAIN=api.example.com bash
+# Or with domains pre-set:
+#   curl -sSL ... | sudo API_DOMAIN=api.example.com VM_DOMAIN=vms.example.com bash
 #
 set -euo pipefail
 
@@ -56,9 +56,8 @@ check_deps() {
 
 # Prompt for input with default value
 prompt() {
-  local var_name=$1
-  local prompt_text=$2
-  local default=${3:-}
+  local prompt_text=$1
+  local default=${2:-}
   local value=""
 
   if [[ -n "$default" ]]; then
@@ -79,25 +78,26 @@ configure() {
   echo -e "${BLUE}╚═══════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
-  # DOMAIN - for API HTTPS access
-  if [[ -z "${DOMAIN:-}" ]]; then
+  # API_DOMAIN - for API HTTPS access
+  if [[ -z "${API_DOMAIN:-}" ]]; then
     echo "Scalebox needs a domain for HTTPS access to the API."
-    echo "This domain should point to this server's IP address."
+    echo "This domain should have a DNS A record pointing to this server."
     echo ""
-    echo "Example: api.scalebox.example.com"
+    echo "Example: scalebox.example.com"
     echo ""
-    DOMAIN=$(prompt "DOMAIN" "Enter API domain (or press Enter to skip HTTPS)")
+    API_DOMAIN=$(prompt "Enter API domain (or press Enter to skip HTTPS)")
   fi
 
-  # BASE_DOMAIN - for VM subdomains (optional)
-  if [[ -z "${BASE_DOMAIN:-}" ]]; then
+  # VM_DOMAIN - for VM HTTPS access (optional)
+  if [[ -z "${VM_DOMAIN:-}" ]]; then
     echo ""
-    echo "Optionally, configure a base domain for VM HTTPS access."
-    echo "VMs will be accessible at https://{vm-name}.{base-domain}"
+    echo "Optionally, configure a domain for VM HTTPS access."
+    echo "VMs will be accessible at https://{vm-name}.{vm-domain}"
+    echo "Requires a wildcard DNS record: *.vms.example.com -> this server"
     echo ""
     echo "Example: vms.example.com -> https://happy-red-panda.vms.example.com"
     echo ""
-    BASE_DOMAIN=$(prompt "BASE_DOMAIN" "Enter VM base domain (optional, press Enter to skip)")
+    VM_DOMAIN=$(prompt "Enter VM domain (optional, press Enter to skip)")
   fi
 
   echo ""
@@ -137,8 +137,8 @@ run_installer() {
   echo ""
 
   # Export config for install.sh
-  export DOMAIN="${DOMAIN:-}"
-  export BASE_DOMAIN="${BASE_DOMAIN:-}"
+  export API_DOMAIN="${API_DOMAIN:-}"
+  export VM_DOMAIN="${VM_DOMAIN:-}"
   export INSTALL_DIR
 
   # Run install.sh
@@ -149,8 +149,8 @@ run_installer() {
 main() {
   echo ""
   echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${GREEN}║                  Scalebox Installer                       ║${NC}"
-  echo -e "${GREEN}║         Firecracker MicroVM Management Platform           ║${NC}"
+  echo -e "${GREEN}║                      Scalebox                             ║${NC}"
+  echo -e "${GREEN}║         Instant sandbox VMs for AI agents                 ║${NC}"
   echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
@@ -158,7 +158,7 @@ main() {
   check_deps
 
   # Interactive config if not pre-set
-  if [[ -z "${DOMAIN:-}" && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
+  if [[ -z "${API_DOMAIN:-}" && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
     configure
   fi
 

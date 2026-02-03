@@ -6,7 +6,7 @@ Wants=systemd-networkd.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/scaleboxd
-EnvironmentFile=/etc/scalebox/config
+EnvironmentFile=/etc/scaleboxd/config
 Restart=on-failure
 RestartSec=5
 

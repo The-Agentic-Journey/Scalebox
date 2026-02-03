@@ -1,13 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
+# CLI configuration - separate from daemon config (/etc/scaleboxd/)
+# Search order: environment vars > user config > system config
+CONFIG_FILE=""
+if [[ -f "${HOME}/.config/scalebox/config" ]]; then
+  CONFIG_FILE="${HOME}/.config/scalebox/config"
+elif [[ -f "/etc/scalebox/config" ]]; then
+  CONFIG_FILE="/etc/scalebox/config"
+fi
+
+# Read config file if found
+if [[ -n "$CONFIG_FILE" ]]; then
+  SCALEBOX_URL="${SCALEBOX_URL:-$(grep -E "^SCALEBOX_URL=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- || echo "")}"
+  SCALEBOX_TOKEN="${SCALEBOX_TOKEN:-$(grep -E "^SCALEBOX_TOKEN=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- || echo "")}"
+fi
+
 API_URL="${SCALEBOX_URL:-http://localhost:8080}"
 API_TOKEN="${SCALEBOX_TOKEN:-}"
-
-# Read token from config if not set
-if [[ -z "$API_TOKEN" && -f /etc/scalebox/config ]]; then
-  API_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
-fi
 
 die() { echo "Error: $1" >&2; exit 1; }
 command -v jq &>/dev/null || die "jq is required. Install with: apt install jq"
@@ -117,7 +127,11 @@ Commands:
 
 Environment:
   SCALEBOX_URL    API URL (default: http://localhost:8080)
-  SCALEBOX_TOKEN  API token (reads /etc/scalebox/config if not set)
+  SCALEBOX_TOKEN  API token
+
+Config files (searched in order):
+  ~/.config/scalebox/config   User config
+  /etc/scalebox/config        System config
 
 Examples:
   scalebox status
