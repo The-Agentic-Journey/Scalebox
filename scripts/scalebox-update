@@ -7,7 +7,8 @@ set -euo pipefail
 
 REPO="The-Agentic-Journey/Scalebox"
 SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
-SCALEBOX_CLI="/usr/local/bin/scalebox"
+SB_CLI="/usr/local/bin/sb"
+SCALEBOX_CLI="/usr/local/bin/scalebox"  # Backward compat symlink
 SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
 HEALTH_URL="http://localhost:8080/health"
 HEALTH_RETRIES=15
@@ -58,7 +59,7 @@ download_release() {
 
   # Verify required files exist
   [[ -f "$temp_dir/scaleboxd" ]] || die "scaleboxd not found in release"
-  [[ -f "$temp_dir/scalebox" ]] || die "scalebox not found in release"
+  [[ -f "$temp_dir/sb" ]] || die "sb not found in release"
   [[ -f "$temp_dir/scaleboxd.service" ]] || die "scaleboxd.service not found in release"
 }
 
@@ -74,9 +75,12 @@ install_new() {
   cp "$temp_dir/scaleboxd" "$SCALEBOXD_BIN"
   chmod +x "$SCALEBOXD_BIN"
 
-  log "Installing new scalebox CLI..."
-  cp "$temp_dir/scalebox" "$SCALEBOX_CLI"
-  chmod +x "$SCALEBOX_CLI"
+  log "Installing new sb CLI..."
+  cp "$temp_dir/sb" "$SB_CLI"
+  chmod +x "$SB_CLI"
+
+  # Backward compatibility symlink
+  ln -sf "$SB_CLI" "$SCALEBOX_CLI"
 
   # Update scalebox-update itself
   if [[ -f "$temp_dir/scalebox-update" ]]; then
