@@ -530,6 +530,19 @@ do_check_update() {
   local update_url
   update_url=$(upload_tarball "scalebox-test.tar.gz")
 
+  # Install scalebox-update if it doesn't exist (for upgrades from pre-update releases)
+  echo "==> Checking if scalebox-update exists..."
+  if ! gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="command -v scalebox-update" &>/dev/null; then
+    echo "==> scalebox-update not found, installing from current build..."
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="cd /tmp && curl -sSL '$update_url' | sudo tar -xzf - ./scalebox-update && sudo mv /tmp/scalebox-update /usr/local/bin/ && sudo chmod +x /usr/local/bin/scalebox-update"
+  fi
+
   echo "==> Running scalebox-update (last release → current build)..."
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
