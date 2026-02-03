@@ -1,0 +1,166 @@
+#!/bin/bash
+#
+# Scalebox Update Script
+# Run on the server: sudo scalebox-update
+#
+set -euo pipefail
+
+REPO="The-Agentic-Journey/Scalebox"
+SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
+SCALEBOX_CLI="/usr/local/bin/scalebox"
+SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
+HEALTH_URL="http://localhost:8080/health"
+HEALTH_RETRIES=15
+HEALTH_DELAY=2
+
+log() { echo "[scalebox-update] $1"; }
+die() { echo "[scalebox-update] ERROR: $1" >&2; exit 1; }
+
+check_root() {
+  [[ $EUID -eq 0 ]] || die "Must run as root. Try: sudo scalebox-update"
+}
+
+check_installed() {
+  [[ -f "$SCALEBOXD_BIN" ]] || die "Scalebox not installed. Run bootstrap first."
+  systemctl is-active scaleboxd &>/dev/null || die "scaleboxd service not running"
+}
+
+check_deps() {
+  for cmd in curl jq tar; do
+    command -v "$cmd" &>/dev/null || die "Required command not found: $cmd"
+  done
+}
+
+get_release_url() {
+  # Allow override for testing
+  if [[ -n "${SCALEBOX_RELEASE_URL:-}" ]]; then
+    echo "$SCALEBOX_RELEASE_URL"
+    return
+  fi
+
+  local api_url="https://api.github.com/repos/$REPO/releases/latest"
+  local download_url
+  download_url=$(curl -sSL "$api_url" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | .browser_download_url' | head -1)
+
+  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+    die "Could not find latest release. Check https://github.com/$REPO/releases"
+  fi
+
+  echo "$download_url"
+}
+
+download_release() {
+  local url=$1
+  local temp_dir=$2
+
+  log "Downloading: $url"
+  curl -sSL "$url" | tar -xz -C "$temp_dir"
+
+  # Verify required files exist
+  [[ -f "$temp_dir/scaleboxd" ]] || die "scaleboxd not found in release"
+  [[ -f "$temp_dir/scalebox" ]] || die "scalebox not found in release"
+  [[ -f "$temp_dir/scaleboxd.service" ]] || die "scaleboxd.service not found in release"
+}
+
+backup_current() {
+  log "Backing up current binary..."
+  cp "$SCALEBOXD_BIN" "${SCALEBOXD_BIN}.prev"
+}
+
+install_new() {
+  local temp_dir=$1
+
+  log "Installing new scaleboxd..."
+  cp "$temp_dir/scaleboxd" "$SCALEBOXD_BIN"
+  chmod +x "$SCALEBOXD_BIN"
+
+  log "Installing new scalebox CLI..."
+  cp "$temp_dir/scalebox" "$SCALEBOX_CLI"
+  chmod +x "$SCALEBOX_CLI"
+
+  # Update scalebox-update itself
+  if [[ -f "$temp_dir/scalebox-update" ]]; then
+    log "Installing new scalebox-update..."
+    cp "$temp_dir/scalebox-update" "/usr/local/bin/scalebox-update"
+    chmod +x "/usr/local/bin/scalebox-update"
+  fi
+
+  # Only update service file if different
+  if ! diff -q "$temp_dir/scaleboxd.service" "$SERVICE_FILE" &>/dev/null; then
+    log "Updating systemd service file..."
+    cp "$temp_dir/scaleboxd.service" "$SERVICE_FILE"
+    systemctl daemon-reload
+  fi
+}
+
+restart_service() {
+  log "Restarting scaleboxd..."
+  systemctl restart scaleboxd
+}
+
+health_check() {
+  log "Waiting for health check..."
+  local i=0
+  while [[ $i -lt $HEALTH_RETRIES ]]; do
+    if curl -sf "$HEALTH_URL" &>/dev/null; then
+      log "Health check passed"
+      return 0
+    fi
+    sleep $HEALTH_DELAY
+    ((i++)) || true
+  done
+  return 1
+}
+
+rollback() {
+  log "Rolling back to previous version..."
+  if [[ -f "${SCALEBOXD_BIN}.prev" ]]; then
+    cp "${SCALEBOXD_BIN}.prev" "$SCALEBOXD_BIN"
+    systemctl restart scaleboxd
+    if health_check; then
+      log "Rollback successful"
+    else
+      die "Rollback failed - manual intervention required"
+    fi
+  else
+    die "No backup found - manual intervention required"
+  fi
+}
+
+cleanup() {
+  rm -f "${SCALEBOXD_BIN}.prev" 2>/dev/null || true
+}
+
+main() {
+  log "Starting Scalebox update..."
+
+  check_root
+  check_deps
+  check_installed
+
+  # Create temp directory for download
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  trap "rm -rf $temp_dir" EXIT
+
+  # Get and download release
+  local release_url
+  release_url=$(get_release_url)
+  download_release "$release_url" "$temp_dir"
+
+  # Perform update with rollback on failure
+  backup_current
+  install_new "$temp_dir"
+  restart_service
+
+  if health_check; then
+    cleanup
+    log "Update complete!"
+  else
+    log "Health check failed after update"
+    rollback
+    die "Update failed - rolled back to previous version"
+  fi
+}
+
+main "$@"
