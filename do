@@ -77,7 +77,6 @@ upload_tarball() {
   local tarball=$1
   GCS_TARBALL_PATH="scalebox-test-$(date +%s)-$$.tar.gz"
 
-  echo "==> Uploading tarball to GCS..."
   gcloud storage cp "$tarball" "gs://$GCS_BUCKET/$GCS_TARBALL_PATH" \
     --project="$GCLOUD_PROJECT"
 
@@ -134,38 +133,6 @@ wait_for_ssh() {
     ((retries--)) || true
   done
   die "SSH not ready after 150s"
-}
-
-provision_vm() {
-  # Verify builds directory exists and has files
-  [[ -d builds && -n "$(ls -A builds 2>/dev/null)" ]] || die "builds/ directory is empty. Run './do build' first."
-
-  echo "==> Creating target directory..."
-  gcloud compute ssh "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --command="sudo mkdir -p /opt/scalebox && sudo chown \$(whoami) /opt/scalebox" \
-    --quiet
-
-  echo "==> Copying builds to VM..."
-  gcloud compute scp --recurse builds/ "$VM_NAME:/opt/scalebox/" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --quiet
-
-  # Move files from builds/ subdirectory to /opt/scalebox/
-  gcloud compute ssh "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --command="mv /opt/scalebox/builds/* /opt/scalebox/ && rmdir /opt/scalebox/builds" \
-    --quiet
-
-  echo "==> Running install script..."
-  gcloud compute ssh "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --command="sudo API_DOMAIN='$API_DOMAIN' bash /opt/scalebox/install.sh" \
-    --quiet
 }
 
 provision_vm_bootstrap() {
