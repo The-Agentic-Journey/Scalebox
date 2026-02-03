@@ -140,3 +140,18 @@ Curated lists of ~30 adverbs, ~100 adjectives, and ~100 nouns providing ~300,000
 
 ### Fallback Suffix
 A timestamp suffix appended to names when all combinations are exhausted (extremely unlikely).
+
+---
+
+## Operations Terms
+
+### Update
+The process of replacing the scaleboxd binary and related files on a running server with a newer version. Performed by running `scalebox-update` as root on the server.
+
+### Rollback
+Automatic restoration of the previous scaleboxd binary if a health check fails after an update. The previous binary is saved as `scaleboxd.prev` during the update process.
+
+### scalebox-update
+A server-side administration tool (installed at `/usr/local/bin/scalebox-update`) that handles updating Scalebox. Downloads the latest release, backs up the current binary, installs new files, restarts the service, and rolls back automatically if health checks fail.
+
+**Note:** This is different from the `scalebox` CLI, which is a user-facing tool for interacting with the Scalebox API.
