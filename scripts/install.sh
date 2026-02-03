@@ -383,6 +383,15 @@ install_cli() {
   fi
 }
 
+# === Install Update Script ===
+install_update_script() {
+  if [[ -f "$INSTALL_DIR/scalebox-update" ]]; then
+    log "Installing scalebox-update..."
+    cp "$INSTALL_DIR/scalebox-update" /usr/local/bin/scalebox-update
+    chmod +x /usr/local/bin/scalebox-update
+  fi
+}
+
 # === Install Systemd Service ===
 install_service() {
   log "Installing systemd service..."
@@ -472,6 +481,7 @@ main() {
   create_rootfs
   install_binary
   install_cli
+  install_update_script
   install_service
   start_service
   install_caddy
