@@ -14,11 +14,9 @@ env:
   DNS_SUFFIX: ${{ secrets.DNS_SUFFIX }}
 
 jobs:
-  test-and-release:
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout
@@ -49,12 +47,67 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Run CI (lint, build, test)
-        env:
-          GCLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-          DNS_ZONE: ${{ secrets.DNS_ZONE }}
-          DNS_SUFFIX: ${{ secrets.DNS_SUFFIX }}
+      - name: Run fresh install test
         run: ./do check
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: builds
+          path: builds/
+
+  check-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cache bun
+        uses: actions/cache@v4
+        with:
+          path: .bun
+          key: bun-${{ runner.os }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run upgrade test
+        run: ./do check-update
+
+  release:
+    needs: [check, check-update]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: builds
+          path: builds/
 
       - name: Create release tarball
         run: |
