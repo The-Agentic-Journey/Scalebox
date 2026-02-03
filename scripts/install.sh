@@ -376,10 +376,12 @@ install_binary() {
 
 # === Install CLI ===
 install_cli() {
-  if [[ -f "$INSTALL_DIR/scalebox" ]]; then
-    log "Installing scalebox CLI..."
-    cp "$INSTALL_DIR/scalebox" /usr/local/bin/scalebox
-    chmod +x /usr/local/bin/scalebox
+  if [[ -f "$INSTALL_DIR/sb" ]]; then
+    log "Installing sb CLI..."
+    cp "$INSTALL_DIR/sb" /usr/local/bin/sb
+    chmod +x /usr/local/bin/sb
+    # Backward compatibility symlink
+    ln -sf /usr/local/bin/sb /usr/local/bin/scalebox
   fi
 }
 
@@ -454,7 +456,7 @@ preflight_check() {
 
   [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
   [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
-  [[ -f "$INSTALL_DIR/scalebox" ]] || missing+=("scalebox CLI")
+  [[ -f "$INSTALL_DIR/sb" ]] || missing+=("sb CLI")
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     die "Missing required files in $INSTALL_DIR: ${missing[*]}"
@@ -503,7 +505,7 @@ main() {
   echo "  Commands:"
   echo "    systemctl status scaleboxd"
   echo "    journalctl -u scaleboxd -f"
-  echo "    scalebox vm list"
+  echo "    sb vm list"
   echo ""
   echo "  Save your API token - it won't be shown again!"
   echo ""

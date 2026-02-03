@@ -271,14 +271,14 @@ do_build() {
   # Verify binary was created
   [[ -f builds/scaleboxd ]] || die "Failed to compile scaleboxd"
 
-  # Copy scripts
+  # Copy scripts (sb replaces scalebox)
   cp scripts/install.sh builds/
-  cp scripts/scalebox builds/
+  cp scripts/install-sb.sh builds/
+  cp scripts/sb builds/
   cp scripts/scaleboxd.service builds/
   cp scripts/scalebox-update builds/
-  chmod +x builds/scalebox-update
 
-  chmod +x builds/scaleboxd builds/scalebox builds/install.sh
+  chmod +x builds/scaleboxd builds/sb builds/install.sh builds/install-sb.sh builds/scalebox-update
 
   echo "==> Build complete"
   ls -la builds/
