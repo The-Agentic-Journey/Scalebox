@@ -1,4 +1,6 @@
 import { chmodSync, readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
 
@@ -9,7 +11,7 @@ export const VM_HOST = process.env.VM_HOST || "localhost";
 export const API_PORT = process.env.API_PORT || "8080";
 export const USE_HTTPS = process.env.USE_HTTPS === "true";
 export const API_BASE_URL = USE_HTTPS ? `https://${VM_HOST}` : `http://${VM_HOST}:${API_PORT}`;
-const API_TOKEN = process.env.API_TOKEN || "dev-token";
+export const API_TOKEN = process.env.API_TOKEN || "dev-token";
 
 // SSH
 export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
@@ -80,4 +82,152 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
 
 export async function sshExec(sshPort: number, command: string): Promise<string> {
 	return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
+}
+
+// === NEW: CLI Test Helpers ===
+// These are added alongside existing HTTP helpers for incremental test migration.
+
+// CLI configuration
+let cliConfigDir: string | null = null;
+
+// Path to test public key file
+export const TEST_PUBLIC_KEY_PATH = join(FIXTURES_DIR, "test_key.pub");
+
+// Get path to sb binary
+function getSbPath(): string {
+	const localPath = join(import.meta.dir, "..", "builds", "sb");
+	try {
+		readFileSync(localPath);
+		return localPath;
+	} catch {
+		return "sb";
+	}
+}
+
+// Initialize CLI with isolated config directory
+export async function initCli(): Promise<void> {
+	cliConfigDir = await mkdtemp(join(tmpdir(), "scalebox-test-"));
+	const host = `${API_BASE_URL}`;
+	const result =
+		await $`echo ${API_TOKEN} | SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} login --host ${host} --token-stdin`.quiet();
+	if (result.exitCode !== 0) {
+		throw new Error(`sb login failed: ${result.stderr.toString()}`);
+	}
+}
+
+// Cleanup CLI config
+export async function cleanupCli(): Promise<void> {
+	if (cliConfigDir) {
+		await rm(cliConfigDir, { recursive: true, force: true });
+		cliConfigDir = null;
+	}
+}
+
+// Execute sb command and return parsed JSON
+export async function sbCmd(
+	...args: string[]
+): Promise<{ exitCode: number; data: Record<string, unknown> | null; error: string | null }> {
+	if (!cliConfigDir) {
+		throw new Error("CLI not initialized. Call initCli() first.");
+	}
+
+	const result = await $`SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} --json ${args}`
+		.quiet()
+		.nothrow();
+
+	const stdout = result.stdout.toString().trim();
+	const stderr = result.stderr.toString().trim();
+
+	let data: Record<string, unknown> | null = null;
+	let error: string | null = null;
+
+	if (stdout) {
+		try {
+			data = JSON.parse(stdout);
+			if (data && typeof data === "object" && "error" in data) {
+				error = data.error as string;
+			}
+		} catch {
+			error = stdout;
+		}
+	}
+
+	if (stderr && !error) {
+		error = stderr;
+	}
+
+	return { exitCode: result.exitCode, data, error };
+}
+
+// Convenience functions for CLI operations
+export async function sbVmCreate(template: string): Promise<Record<string, unknown>> {
+	const result = await sbCmd("vm", "create", "-t", template, "-k", `@${TEST_PUBLIC_KEY_PATH}`);
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to create VM: ${result.error}`);
+	}
+	return result.data;
+}
+
+export async function sbVmDelete(nameOrId: string): Promise<void> {
+	const result = await sbCmd("vm", "delete", nameOrId);
+	if (result.exitCode !== 0) {
+		throw new Error(`Failed to delete VM: ${result.error}`);
+	}
+}
+
+export async function sbVmGet(nameOrId: string): Promise<Record<string, unknown> | null> {
+	const result = await sbCmd("vm", "get", nameOrId);
+	if (result.exitCode !== 0) {
+		return null;
+	}
+	return result.data;
+}
+
+export async function sbVmList(): Promise<Record<string, unknown>[]> {
+	const result = await sbCmd("vm", "list");
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to list VMs: ${result.error}`);
+	}
+	return (result.data as { vms: Record<string, unknown>[] }).vms || [];
+}
+
+export async function sbVmWait(nameOrId: string, timeoutSec = 60): Promise<void> {
+	const result = await sbCmd("vm", "wait", nameOrId, "--ssh", "--timeout", String(timeoutSec));
+	if (result.exitCode !== 0) {
+		throw new Error(`Failed waiting for SSH: ${result.error}`);
+	}
+}
+
+export async function sbVmSnapshot(
+	nameOrId: string,
+	templateName: string,
+): Promise<Record<string, unknown>> {
+	const result = await sbCmd("vm", "snapshot", nameOrId, "-n", templateName);
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to snapshot VM: ${result.error}`);
+	}
+	return result.data;
+}
+
+export async function sbTemplateList(): Promise<Record<string, unknown>[]> {
+	const result = await sbCmd("template", "list");
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to list templates: ${result.error}`);
+	}
+	return (result.data as { templates: Record<string, unknown>[] }).templates || [];
+}
+
+export async function sbTemplateDelete(name: string): Promise<void> {
+	const result = await sbCmd("template", "delete", name);
+	if (result.exitCode !== 0) {
+		throw new Error(`Failed to delete template: ${result.error}`);
+	}
+}
+
+export async function sbStatus(): Promise<Record<string, unknown>> {
+	const result = await sbCmd("status");
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to get status: ${result.error}`);
+	}
+	return result.data;
 }
