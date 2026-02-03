@@ -154,4 +154,9 @@ Automatic restoration of the previous scaleboxd binary if a health check fails a
 ### scalebox-update
 A server-side administration tool (installed at `/usr/local/bin/scalebox-update`) that handles updating Scalebox. Downloads the latest release, backs up the current binary, installs new files, restarts the service, and rolls back automatically if health checks fail.
 
-**Note:** This is different from the `scalebox` CLI, which is a user-facing tool for interacting with the Scalebox API.
+**Note:** This is different from `sb CLI`, which is a user-facing tool for interacting with the Scalebox API.
+
+### sb CLI
+The user-facing command-line tool for interacting with the Scalebox API. Named `sb` for brevity. A `scalebox` symlink is maintained for backward compatibility.
+
+**Note:** This is different from `scalebox-update`, which is a server-side administration tool.

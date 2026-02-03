@@ -19,22 +19,8 @@ export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
 chmodSync(TEST_PRIVATE_KEY_PATH, 0o600);
 export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
 
-// API client
+// HTTP API client (kept for auth tests and cleanup)
 export const api = {
-	async get(path: string) {
-		const res = await fetch(`${API_BASE_URL}${path}`, {
-			headers: { Authorization: `Bearer ${API_TOKEN}` },
-		});
-		return { status: res.status, data: res.ok ? await res.json() : null };
-	},
-	async post(path: string, body: unknown) {
-		const res = await fetch(`${API_BASE_URL}${path}`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
-			body: JSON.stringify(body),
-		});
-		return { status: res.status, data: res.ok ? await res.json() : null };
-	},
 	async delete(path: string) {
 		const res = await fetch(`${API_BASE_URL}${path}`, {
 			method: "DELETE",
