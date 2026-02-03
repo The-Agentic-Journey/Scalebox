@@ -21,20 +21,13 @@ export function startProxy(
 	targetIp: string,
 	targetPort: number,
 ): Promise<void> {
-	log(
-		`startProxy called: vmId=${vmId}, localPort=${localPort}, targetIp=${targetIp}, targetPort=${targetPort}`,
-	);
-	log(`Current proxy count before: ${proxies.size}`);
 	return new Promise((resolve, reject) => {
 		try {
-			log(`Calling Bun.listen on port ${localPort}...`);
 			const server = Bun.listen<ProxySocketData>({
 				hostname: "0.0.0.0",
 				port: localPort,
 				socket: {
 					open(clientSocket) {
-						log(`Client connected to port ${localPort}, forwarding to ${targetIp}:${targetPort}`);
-
 						// Initialize socket data with pending buffer
 						clientSocket.data = {
 							targetIp,
@@ -50,11 +43,9 @@ export function startProxy(
 							socket: {
 								data(vmSocket, data) {
 									// Forward data from VM to client
-									log(`Received ${data.length} bytes from VM, forwarding to client`);
 									vmSocket.data.clientSocket.write(data);
 								},
 								open(vmSocket) {
-									log(`Connected to VM at ${targetIp}:${targetPort}`);
 									// Store reference to client socket
 									vmSocket.data = { clientSocket };
 									// Store VM socket reference and mark as connected
@@ -63,7 +54,6 @@ export function startProxy(
 
 									// Flush any pending data that arrived before VM connection
 									if (clientSocket.data.pendingData.length > 0) {
-										log(`Flushing ${clientSocket.data.pendingData.length} pending chunks to VM`);
 										for (const chunk of clientSocket.data.pendingData) {
 											vmSocket.write(chunk);
 										}
@@ -71,38 +61,34 @@ export function startProxy(
 									}
 								},
 								close(vmSocket) {
-									log("VM socket closed");
 									vmSocket.data.clientSocket.end();
 								},
 								error(vmSocket, err) {
-									log(`VM socket error: ${err}`);
+									log(`VM connection error: ${err}`);
 									vmSocket.data.clientSocket.end();
 								},
 							},
 						}).catch((err) => {
-							log(`Failed to connect to VM at ${targetIp}:${targetPort}: ${err}`);
+							log(`Failed to connect to VM: ${err}`);
 							clientSocket.end();
 						});
 					},
 					data(clientSocket, data) {
 						// Forward data from client to VM
 						if (clientSocket.data.vmConnected && clientSocket.data.vmSocket) {
-							log(`Forwarding ${data.length} bytes from client to VM`);
 							clientSocket.data.vmSocket.write(data);
 						} else {
 							// Buffer data until VM connection is ready
-							log(`Buffering ${data.length} bytes from client until VM connected...`);
 							clientSocket.data.pendingData.push(new Uint8Array(data));
 						}
 					},
 					close(clientSocket) {
-						log("Client socket closed");
 						if (clientSocket.data.vmSocket) {
 							clientSocket.data.vmSocket.end();
 						}
 					},
 					error(clientSocket, err) {
-						log(`Client socket error: ${err}`);
+						log(`Client connection error: ${err}`);
 						if (clientSocket.data.vmSocket) {
 							clientSocket.data.vmSocket.end();
 						}
@@ -111,15 +97,10 @@ export function startProxy(
 			});
 
 			proxies.set(vmId, server);
-			log(`SUCCESS: Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`);
-			log(`Server hostname: ${server.hostname}, port: ${server.port}`);
-			log(`Current proxy count after: ${proxies.size}`);
-			log(`Active proxies: ${Array.from(proxies.keys()).join(", ")}`);
+			log(`Proxy started on port ${localPort} -> ${targetIp}:${targetPort}`);
 			resolve();
 		} catch (err) {
-			log(`ERROR: Bun.listen failed on port ${localPort}: ${err}`);
-			log(`Error type: ${typeof err}`);
-			log(`Error details: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
+			log(`Failed to start proxy on port ${localPort}: ${err}`);
 			reject(err);
 		}
 	});

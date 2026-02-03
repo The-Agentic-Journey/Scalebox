@@ -258,63 +258,6 @@ systemctl disable ssh.socket 2>/dev/null || true
 systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
-
-# Debug: Show SSH service configuration
-echo "=== SSH Service Debug ==="
-ls -la /lib/systemd/system/ssh* 2>/dev/null || echo "No ssh units in /lib/systemd/system"
-ls -la /etc/systemd/system/*.wants/ssh* 2>/dev/null || echo "No ssh units enabled"
-echo "=== End SSH Debug ==="
-
-# Create diagnostic script that outputs SSH/network status to console
-cat > /usr/local/bin/scalebox-diag.sh <<'DIAGSCRIPT'
-#!/bin/bash
-echo "=== SCALEBOX DIAGNOSTICS ==="
-echo "--- Timestamp: $(date) ---"
-echo "--- Network Interfaces ---"
-ip addr
-echo "--- Listening Ports ---"
-ss -tlnp
-echo "--- SSH Service Status ---"
-systemctl status ssh.service --no-pager || true
-echo "--- SSHD Process ---"
-ps aux | grep sshd | grep -v grep || echo "No sshd process found"
-echo "--- SSH Config (ListenAddress) ---"
-grep -E "^#?ListenAddress" /etc/ssh/sshd_config || echo "No ListenAddress configured (default: all)"
-echo "--- SSH Host Keys ---"
-ls -la /etc/ssh/ssh_host_* 2>/dev/null || echo "No host keys found"
-echo "--- Route Table ---"
-ip route
-echo "--- Testing SSH Banner (localhost) ---"
-timeout 2 bash -c 'echo "" | nc localhost 22' 2>&1 || echo "Could not get SSH banner from localhost"
-echo "--- Testing SSH Banner (eth0 IP) ---"
-ETH0_IP=$(ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-if [ -n "$ETH0_IP" ]; then
-  echo "eth0 IP: $ETH0_IP"
-  timeout 2 bash -c "echo '' | nc $ETH0_IP 22" 2>&1 || echo "Could not get SSH banner from $ETH0_IP"
-else
-  echo "eth0 IP not found"
-fi
-echo "=== END DIAGNOSTICS ==="
-DIAGSCRIPT
-chmod +x /usr/local/bin/scalebox-diag.sh
-
-# Create systemd service to run diagnostics after network is up
-cat > /etc/systemd/system/scalebox-diag.service <<'DIAGSERVICE'
-[Unit]
-Description=Scalebox Diagnostics
-After=ssh.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/scalebox-diag.sh
-StandardOutput=journal+console
-StandardError=journal+console
-
-[Install]
-WantedBy=multi-user.target
-DIAGSERVICE
-systemctl enable scalebox-diag.service
 CHROOT
 
   # Create ext4 image (use .tmp for atomic creation)

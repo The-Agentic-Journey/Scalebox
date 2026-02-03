@@ -283,12 +283,6 @@ check_firewall_rule() {
 }
 
 do_check() {
-  echo "==> Starting do_check..."
-  echo "==> SCRIPT_DIR: $SCRIPT_DIR"
-  echo "==> BUN_DIR: $BUN_DIR"
-  echo "==> BUN_BIN: $BUN_BIN"
-  echo "==> Checking if bun exists: $(ls -la $BUN_BIN 2>&1 || echo 'NOT FOUND')"
-
   trap cleanup EXIT
 
   ensure_bun
@@ -317,76 +311,6 @@ do_check() {
   local token
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
-
-  # Debug: Create a test VM and check if it boots properly
-  echo "==> Debug: Creating a test VM to check boot status..."
-  local debug_vm_response
-  debug_vm_response=$(curl -s -X POST "https://$VM_FQDN/vms" \
-    -H "Authorization: Bearer $token" \
-    -H "Content-Type: application/json" \
-    -d '{"template": "debian-base", "ssh_public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ test@test"}')
-  echo "==> Debug VM response: $debug_vm_response"
-  local debug_vm_id=$(echo "$debug_vm_response" | jq -r '.id')
-  local debug_vm_ip=$(echo "$debug_vm_response" | jq -r '.ip')
-
-  if [[ -n "$debug_vm_id" && "$debug_vm_id" != "null" ]]; then
-    echo "==> Debug: Waiting 30s for VM to boot..."
-    sleep 30
-
-    echo "==> Debug: Checking Firecracker process..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="ps aux | grep -E 'firecracker|$debug_vm_id' | grep -v grep || echo 'No firecracker process found'" \
-      --quiet || echo "Failed to check process"
-
-    echo "==> Debug: Checking VM network connectivity from host..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="ping -c 2 $debug_vm_ip || echo 'Ping failed'" \
-      --quiet || echo "Failed to check network"
-
-    echo "==> Debug: Checking Firecracker console log (VM boot output)..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="cat /tmp/fc-$debug_vm_id-console.log 2>/dev/null || echo 'Console log not found'" \
-      --quiet || echo "Failed to get console log"
-
-    echo "==> Debug: Testing direct TCP connection to VM SSH port (using bash /dev/tcp)..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="timeout 5 bash -c 'exec 3<>/dev/tcp/$debug_vm_ip/22 && cat <&3 & sleep 2; kill %1 2>/dev/null' 2>&1 || echo 'Direct TCP to port 22 failed'" \
-      --quiet || echo "Failed to test direct TCP"
-
-    echo "==> Debug: Testing SSH connection through proxy port..."
-    local debug_ssh_port=$(echo "$debug_vm_response" | jq -r '.ssh_port')
-    echo "==> SSH port: $debug_ssh_port"
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$debug_ssh_port && cat <&3 & sleep 2; kill %1 2>/dev/null' 2>&1 || echo 'Proxy port connection failed'" \
-      --quiet || echo "Failed to test proxy port"
-
-    echo "==> Debug: Checking scaleboxd logs for VM creation..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="journalctl -u scaleboxd -n 50 --no-pager | grep -E '$debug_vm_id|proxy|error|listen|port' || echo 'No relevant logs'" \
-      --quiet || echo "Failed to get logs"
-
-    echo "==> Debug: Checking listening ports on host..."
-    gcloud compute ssh "$VM_NAME" \
-      --zone="$GCLOUD_ZONE" \
-      --project="$GCLOUD_PROJECT" \
-      --command="ss -tlnp | grep -E '$debug_ssh_port|scaleboxd' || echo 'Port not found in ss output'" \
-      --quiet || echo "Failed to get port info"
-
-    echo "==> Debug: Deleting debug VM..."
-    curl -s -X DELETE "https://$VM_FQDN/vms/$debug_vm_id" -H "Authorization: Bearer $token" || true
-  fi
 
   echo "==> Running tests against https://$VM_FQDN..."
   if ! VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then

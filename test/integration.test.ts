@@ -133,9 +133,9 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ssh_port, 180000);
+			await waitForSsh(data.ssh_port, 90000);
 		},
-		{ timeout: 180000 },
+		{ timeout: 90000 },
 	);
 
 	test(
@@ -147,11 +147,11 @@ describe("Firecracker API", () => {
 			});
 			createdVmIds.push(data.id);
 
-			await waitForSsh(data.ssh_port, 180000);
+			await waitForSsh(data.ssh_port, 90000);
 			const output = await sshExec(data.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
-		{ timeout: 180000 },
+		{ timeout: 90000 },
 	);
 
 	// === Phase 6: Snapshots ===
@@ -166,7 +166,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ssh_port, 180000);
+			await waitForSsh(vm.ssh_port, 90000);
 
 			// Create a snapshot
 			const templateName = `snapshot-test-${Date.now()}`;
@@ -182,7 +182,7 @@ describe("Firecracker API", () => {
 			expect(data.size_bytes).toBeGreaterThan(0);
 			expect(data.created_at).toBeTruthy();
 		},
-		{ timeout: 180000 },
+		{ timeout: 90000 },
 	);
 
 	test(
@@ -196,7 +196,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm.ssh_port, 180000);
+			await waitForSsh(vm.ssh_port, 90000);
 
 			// Create a snapshot
 			const templateName = `snapshot-list-${Date.now()}`;
@@ -211,7 +211,7 @@ describe("Firecracker API", () => {
 			const names = data.templates.map((t: { name: string }) => t.name);
 			expect(names).toContain(templateName);
 		},
-		{ timeout: 180000 },
+		{ timeout: 90000 },
 	);
 
 	test(
@@ -225,7 +225,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ssh_port, 180000);
+			await waitForSsh(vm1.ssh_port, 90000);
 
 			// Create a snapshot
 			const templateName = `snapshot-create-${Date.now()}`;
@@ -246,11 +246,11 @@ describe("Firecracker API", () => {
 			expect(vm2.template).toBe(templateName);
 
 			// Verify new VM is reachable
-			await waitForSsh(vm2.ssh_port, 180000);
+			await waitForSsh(vm2.ssh_port, 90000);
 			const output = await sshExec(vm2.ssh_port, "echo hello");
 			expect(output.trim()).toBe("hello");
 		},
-		{ timeout: 300000 },
+		{ timeout: 150000 },
 	);
 
 	test(
@@ -264,7 +264,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm1.id);
 
 			// Wait for VM to be ready
-			await waitForSsh(vm1.ssh_port, 180000);
+			await waitForSsh(vm1.ssh_port, 90000);
 
 			// Write a unique file to the VM
 			const testContent = `test-content-${Date.now()}`;
@@ -293,11 +293,11 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm2.id);
 
 			// Verify new VM has the file with the content
-			await waitForSsh(vm2.ssh_port, 180000);
+			await waitForSsh(vm2.ssh_port, 90000);
 			const content = await sshExec(vm2.ssh_port, "cat /root/testfile.txt");
 			expect(content.trim()).toBe(testContent);
 		},
-		{ timeout: 300000 },
+		{ timeout: 150000 },
 	);
 
 	// === Phase 7: Cleanup ===
@@ -312,7 +312,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm.id);
 
 			// Wait for VM to be ready via SSH
-			await waitForSsh(vm.ssh_port, 180000);
+			await waitForSsh(vm.ssh_port, 90000);
 
 			// Take a snapshot with a unique name
 			const templateName = `snapshot-delete-${Date.now()}`;
@@ -349,6 +349,6 @@ describe("Firecracker API", () => {
 			const namesAfterDelete = templatesAfterDelete.templates.map((t: { name: string }) => t.name);
 			expect(namesAfterDelete).not.toContain(templateName);
 		},
-		{ timeout: 180000 },
+		{ timeout: 90000 },
 	);
 });
