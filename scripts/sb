@@ -1,0 +1,495 @@
+#!/bin/bash
+set -euo pipefail
+
+# === Configuration ===
+# Config directory (can be overridden for testing)
+SCALEBOX_CONFIG_DIR="${SCALEBOX_CONFIG_DIR:-$HOME/.config/scalebox}"
+SCALEBOX_CONFIG_FILE="$SCALEBOX_CONFIG_DIR/config"
+
+# Load config from multiple sources (in precedence order)
+load_config() {
+  # 1. Environment variables (highest priority) - already set
+  # 2. User config file
+  if [[ -z "${SCALEBOX_HOST:-}" || -z "${SCALEBOX_TOKEN:-}" ]] && [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$SCALEBOX_CONFIG_FILE"
+  fi
+  # 3. System config file (lowest priority, for server-side usage)
+  if [[ -z "${SCALEBOX_HOST:-}" ]] && [[ -f /etc/scalebox/config ]]; then
+    SCALEBOX_HOST="http://localhost:8080"
+    if [[ -z "${SCALEBOX_TOKEN:-}" ]]; then
+      SCALEBOX_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+    fi
+  fi
+  # 4. Legacy environment variable support
+  if [[ -n "${SCALEBOX_URL:-}" && -z "${SCALEBOX_HOST:-}" ]]; then
+    SCALEBOX_HOST="$SCALEBOX_URL"
+  fi
+}
+
+# === Helpers ===
+die() { echo "Error: $1" >&2; exit 1; }
+need_jq() { command -v jq &>/dev/null || die "jq is required. Install with: apt install jq (or brew install jq)"; }
+need_config() {
+  [[ -n "${SCALEBOX_HOST:-}" ]] || die "Not logged in. Run 'sb login' first or set SCALEBOX_HOST."
+  [[ -n "${SCALEBOX_TOKEN:-}" ]] || die "No token configured. Run 'sb login' first or set SCALEBOX_TOKEN."
+}
+
+# === API Client ===
+api() {
+  local method=$1 path=$2; shift 2
+  local response http_code
+
+  # Capture both response body and HTTP status code
+  response=$(curl -sf -w "\n%{http_code}" -X "$method" \
+    -H "Authorization: Bearer $SCALEBOX_TOKEN" \
+    -H "Content-Type: application/json" \
+    "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null) || {
+    # curl failed (connection error, etc)
+    echo '{"error":"Connection failed","status":0}'
+    return 1
+  }
+
+  http_code=$(echo "$response" | tail -n1)
+  response=$(echo "$response" | sed '$d')
+
+  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+    echo "$response"
+    return 0
+  else
+    # Return error with status code for --json mode
+    if [[ -n "$response" ]]; then
+      echo "$response" | jq -c ". + {status: $http_code}" 2>/dev/null || echo "{\"error\":\"HTTP $http_code\",\"status\":$http_code}"
+    else
+      echo "{\"error\":\"HTTP $http_code\",\"status\":$http_code}"
+    fi
+    return 1
+  fi
+}
+
+# === Output Formatting ===
+JSON_OUTPUT="${SCALEBOX_JSON:-false}"
+
+output_table() {
+  local jq_filter="$1"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq .
+  else
+    jq -r "$jq_filter" | column -t 2>/dev/null || cat
+  fi
+}
+
+output_single() {
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq -c .
+  else
+    jq .
+  fi
+}
+
+output_message() {
+  local message="$1"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq -n --arg msg "$message" '{message: $msg}'
+  else
+    echo "$message"
+  fi
+}
+
+output_error() {
+  local message="$1"
+  local status="${2:-1}"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq -n --arg msg "$message" --argjson status "$status" '{error: $msg, status: $status}'
+  else
+    echo "Error: $message" >&2
+  fi
+  return 1
+}
+
+# === Commands ===
+
+cmd_login() {
+  local host="" token="" token_stdin=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --host) host="$2"; shift 2 ;;
+      --token-stdin) token_stdin=true; shift ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  # Interactive mode if host not provided
+  if [[ -z "$host" ]]; then
+    echo -n "Scalebox host URL: "
+    read -r host
+  fi
+  [[ -n "$host" ]] || die "Host URL is required"
+
+  # Validate URL format (basic check)
+  [[ "$host" =~ ^https?:// ]] || die "Host must start with http:// or https://"
+
+  # Remove trailing slash
+  host="${host%/}"
+
+  # Get token
+  if [[ "$token_stdin" == "true" ]]; then
+    read -r token
+  else
+    echo -n "API token: "
+    read -rs token
+    echo  # newline after hidden input
+  fi
+  [[ -n "$token" ]] || die "Token is required"
+
+  # Test connection
+  echo "Testing connection..."
+  if ! curl -sf -H "Authorization: Bearer $token" "$host/health" >/dev/null 2>&1; then
+    die "Failed to connect to $host. Check the URL and token."
+  fi
+
+  # Create config directory with secure permissions
+  # Note: mkdir -p creates parent dirs (e.g., ~/.config) if they don't exist
+  mkdir -p "$SCALEBOX_CONFIG_DIR"
+  chmod 700 "$SCALEBOX_CONFIG_DIR"
+
+  # Write config with secure permissions
+  (
+    umask 077
+    cat > "$SCALEBOX_CONFIG_FILE" <<EOF
+SCALEBOX_HOST=$host
+SCALEBOX_TOKEN=$token
+EOF
+  )
+
+  output_message "Logged in to $host"
+}
+
+cmd_logout() {
+  if [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
+    rm -f "$SCALEBOX_CONFIG_FILE"
+    output_message "Logged out (config removed)"
+  else
+    output_message "Not logged in (no config file)"
+  fi
+}
+
+cmd_config_show() {
+  local show_token=false
+  [[ "${1:-}" == "--show-token" ]] && show_token=true
+
+  local display_token
+  if [[ "$show_token" == "true" ]]; then
+    display_token="${SCALEBOX_TOKEN:-}"
+  else
+    # Mask token: show first 6 and last 4 chars
+    if [[ -n "${SCALEBOX_TOKEN:-}" && ${#SCALEBOX_TOKEN} -gt 10 ]]; then
+      display_token="${SCALEBOX_TOKEN:0:6}...${SCALEBOX_TOKEN: -4}"
+    else
+      display_token="${SCALEBOX_TOKEN:-}"
+    fi
+  fi
+
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq -n \
+      --arg host "${SCALEBOX_HOST:-}" \
+      --arg token "$display_token" \
+      --arg config_dir "$SCALEBOX_CONFIG_DIR" \
+      '{host: $host, token: $token, config_dir: $config_dir}'
+  else
+    echo "Host:       ${SCALEBOX_HOST:-<not set>}"
+    echo "Token:      ${display_token:-<not set>}"
+    echo "Config dir: $SCALEBOX_CONFIG_DIR"
+    if [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
+      echo "Config file: $SCALEBOX_CONFIG_FILE (exists)"
+    else
+      echo "Config file: $SCALEBOX_CONFIG_FILE (not found)"
+    fi
+  fi
+}
+
+cmd_status() {
+  local response
+  if response=$(curl -sf "${SCALEBOX_HOST:-http://localhost:8080}/health" 2>/dev/null); then
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      echo "$response" | jq -c '. + {status: 200}'
+    else
+      echo "$response" | jq .
+    fi
+  else
+    output_error "Cannot connect to ${SCALEBOX_HOST:-http://localhost:8080}" 0
+  fi
+}
+
+cmd_vm_list() {
+  need_config
+  local response
+  if response=$(api GET /vms); then
+    # Note: adds .name column (not in old scalebox CLI which showed: id, template, ip, ssh_port)
+    echo "$response" | output_table '.vms[] | [.name, .id, .template, .ip, .ssh_port] | @tsv'
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_vm_create() {
+  need_config
+  local template="" key="" key_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--template) template="$2"; shift 2 ;;
+      -k|--key)
+        if [[ "$2" == @* ]]; then
+          # @filepath syntax - read from file
+          key_file="${2:1}"
+          [[ -f "$key_file" ]] || die "Key file not found: $key_file"
+          key=$(cat "$key_file")
+        else
+          key="$2"
+        fi
+        shift 2
+        ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -n "$template" ]] || die "Template required: -t TEMPLATE"
+  [[ -n "$key" ]] || die "SSH key required: -k 'ssh-rsa ...' or -k @/path/to/key.pub"
+
+  local response
+  if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
+    echo "$response" | output_single
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_vm_get() {
+  need_config
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "Usage: sb vm get <name|id>"
+
+  local response
+  if response=$(api GET "/vms/$id"); then
+    echo "$response" | output_single
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_vm_delete() {
+  need_config
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "Usage: sb vm delete <name|id>"
+
+  local response
+  if response=$(api DELETE "/vms/$id"); then
+    output_message "Deleted $id"
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_vm_snapshot() {
+  need_config
+  local id="${1:-}"
+  local name=""
+  shift || true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -n|--name) name="$2"; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -n "$id" ]] || die "Usage: sb vm snapshot <name|id> -n TEMPLATE_NAME"
+  [[ -n "$name" ]] || die "Template name required: -n NAME"
+
+  local response
+  if response=$(api POST "/vms/$id/snapshot" -d "$(jq -n --arg n "$name" '{template_name:$n}')"); then
+    echo "$response" | output_single
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_vm_wait() {
+  need_config
+  local id="${1:-}"
+  local wait_ssh=false
+  local timeout=60
+  shift || true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ssh) wait_ssh=true; shift ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -n "$id" ]] || die "Usage: sb vm wait <name|id> --ssh [--timeout SECONDS]"
+  [[ "$wait_ssh" == "true" ]] || die "Must specify --ssh (only supported wait condition)"
+
+  # Get VM details
+  local vm_data ssh_port
+  vm_data=$(api GET "/vms/$id") || die "VM not found: $id"
+  ssh_port=$(echo "$vm_data" | jq -r '.ssh_port')
+
+  # Extract host from SCALEBOX_HOST (remove protocol and port)
+  local ssh_host
+  ssh_host=$(echo "$SCALEBOX_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||')
+
+  local start=$SECONDS
+  while (( SECONDS - start < timeout )); do
+    if nc -z -w1 "$ssh_host" "$ssh_port" 2>/dev/null; then
+      output_message "SSH ready on port $ssh_port"
+      return 0
+    fi
+    sleep 1
+  done
+
+  output_error "Timeout waiting for SSH on port $ssh_port after ${timeout}s" 1
+}
+
+cmd_template_list() {
+  need_config
+  local response
+  if response=$(api GET /templates); then
+    echo "$response" | output_table '.templates[] | [.name, .size_bytes] | @tsv'
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_template_delete() {
+  need_config
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "Usage: sb template delete <name>"
+
+  local response
+  if response=$(api DELETE "/templates/$name"); then
+    output_message "Deleted template $name"
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
+cmd_version() {
+  echo "sb version 0.1.0"
+}
+
+cmd_help() {
+  cat <<'EOF'
+Scalebox CLI
+
+Usage: sb [--json] <command>
+
+Global Options:
+  --json          Output in JSON format (for scripting)
+
+Commands:
+  login                         Log in to a Scalebox server
+  logout                        Remove stored credentials
+  config show [--show-token]    Show current configuration
+  status                        Health check (no auth required)
+
+  vm list                       List VMs
+  vm create -t TPL -k KEY       Create VM (-k @file.pub or -k "ssh-rsa ...")
+  vm get <name|id>              Get VM details
+  vm delete <name|id>           Delete VM
+  vm snapshot <name|id> -n NAME Snapshot VM to template
+  vm wait <name|id> --ssh       Wait for SSH to be ready
+
+  template list                 List templates
+  template delete <name>        Delete template
+
+  version                       Show version
+  help                          Show this help
+
+Environment Variables:
+  SCALEBOX_HOST        API host URL (overrides config file)
+  SCALEBOX_TOKEN       API token (overrides config file)
+  SCALEBOX_CONFIG_DIR  Config directory (default: ~/.config/scalebox)
+  SCALEBOX_JSON=true   Always output JSON
+
+Examples:
+  sb login
+  sb vm create -t debian-base -k @~/.ssh/id_rsa.pub
+  sb vm list
+  sb --json vm get my-vm-name
+  sb vm wait my-vm-name --ssh --timeout 120
+  sb vm snapshot my-vm-name -n my-snapshot
+EOF
+}
+
+# === Main ===
+main() {
+  need_jq
+
+  # Parse global options
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON_OUTPUT=true; shift ;;
+      -*)
+        if [[ "$1" != "--help" && "$1" != "-h" ]]; then
+          die "Unknown global option: $1"
+        fi
+        break
+        ;;
+      *) break ;;
+    esac
+  done
+
+  # Load config after parsing global options (but before commands)
+  # Skip loading for login/help/version commands
+  case "${1:-help}" in
+    login|help|--help|-h|version) ;;
+    *) load_config ;;
+  esac
+
+  case "${1:-help}" in
+    login) shift; cmd_login "$@" ;;
+    logout) cmd_logout ;;
+    config)
+      case "${2:-}" in
+        show) shift 2; cmd_config_show "$@" ;;
+        *) die "Usage: sb config show [--show-token]" ;;
+      esac
+      ;;
+    status) cmd_status ;;
+    vm)
+      case "${2:-}" in
+        list) cmd_vm_list ;;
+        create) shift 2; cmd_vm_create "$@" ;;
+        get) shift 2; cmd_vm_get "$@" ;;
+        delete) shift 2; cmd_vm_delete "$@" ;;
+        snapshot) shift 2; cmd_vm_snapshot "$@" ;;
+        wait) shift 2; cmd_vm_wait "$@" ;;
+        *) die "Usage: sb vm [list|create|get|delete|snapshot|wait]" ;;
+      esac
+      ;;
+    template)
+      case "${2:-}" in
+        list) cmd_template_list ;;
+        delete) shift 2; cmd_template_delete "$@" ;;
+        *) die "Usage: sb template [list|delete]" ;;
+      esac
+      ;;
+    version|--version|-v) cmd_version ;;
+    help|--help|-h) cmd_help ;;
+    *) die "Unknown command: $1. Try: sb help" ;;
+  esac
+}
+
+main "$@"
