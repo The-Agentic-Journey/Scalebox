@@ -107,6 +107,15 @@ Break into implementable phases, each with:
 
 ## Verification
 How to test the feature works.
+
+## Update Considerations
+
+How will this feature behave when updating from an older version?
+
+- **Config changes**: [New keys with defaults / None]
+- **Storage changes**: [New directories created on demand / None]
+- **Dependency changes**: [New packages in scalebox-update / None]
+- **Migration needed**: [Yes - describe / No]
 ```
 
 ### 2. Follow Existing Patterns
@@ -225,3 +234,54 @@ Tests create real VMs, so they need a host with KVM support.
 3. Should this be a new plan document first?
 4. Have I read the existing code I'm modifying?
 5. Does this maintain the simplicity principle?
+
+## Backwards Compatibility
+
+Scalebox servers are updated in-place via `scalebox-update`. New code must work with old configurations and storage layouts.
+
+### Rules for Config Changes
+
+1. **New config keys MUST have defaults** in `src/config.ts`:
+   ```typescript
+   // GOOD: Has default, works with old configs
+   newFeatureEnabled: process.env.NEW_FEATURE === "true" || false,
+
+   // BAD: Crashes if not in config
+   newFeatureEnabled: process.env.NEW_FEATURE === "true",
+   ```
+
+2. **Never rename config keys** - add new ones, deprecate old ones
+3. **Document new config** in install.sh comments, but don't require it
+
+### Rules for Storage Changes
+
+1. **Create directories on demand**, not just in install.sh:
+   ```typescript
+   // GOOD: Creates if missing
+   await fs.mkdir(newPath, { recursive: true });
+
+   // BAD: Assumes directory exists
+   await fs.writeFile(`${newPath}/file`, data);
+   ```
+
+2. **Never change existing paths** - old VMs/templates must still work
+
+### Rules for Dependencies
+
+1. **Prefer pure TypeScript** over system commands
+2. **If new apt package needed**, add to scalebox-update:
+   ```bash
+   # In install_new():
+   if ! command -v newcmd &>/dev/null; then
+     apt-get install -y -qq newpackage
+   fi
+   ```
+
+### Update Considerations Checklist
+
+When planning a feature, ask:
+- [ ] Does this add new config? → Add default in config.ts
+- [ ] Does this need new directories? → Create on demand
+- [ ] Does this need new system packages? → Add to scalebox-update
+- [ ] Does this change API responses? → Is it additive only?
+- [ ] Will `./do check-update` catch issues? → If not, add specific test
