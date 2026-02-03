@@ -57,8 +57,15 @@ A port-forwarding mechanism that maps a host port to a VM's internal port. Used 
 ### HTTPS Gateway
 Caddy reverse proxy that routes `https://{vm-name}.{base-domain}` to the VM's port 8080. Provides automatic TLS via Let's Encrypt.
 
-### Base Domain
-The configured domain suffix for VM subdomains (e.g., `vms.example.com`). When set, VMs are accessible at `https://{name}.{base-domain}`.
+### API Domain (DOMAIN)
+The configured domain for HTTPS access to the Scalebox API itself (e.g., `api.scalebox.example.com`). When set, the API is accessible at `https://{domain}` with automatic TLS via Let's Encrypt.
+
+### Base Domain (BASE_DOMAIN)
+The configured domain suffix for VM subdomains (e.g., `vms.example.com`). When set, VMs are accessible at `https://{name}.{base-domain}` (routes to port 8080 inside the VM).
+
+**Note:** These are separate settings:
+- `DOMAIN` = where the API lives
+- `BASE_DOMAIN` = where VMs are exposed via HTTPS
 
 ### On-Demand TLS
 Caddy's mechanism for obtaining TLS certificates only when first requested. Validated via the `/caddy/check` endpoint.
