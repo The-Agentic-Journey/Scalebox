@@ -69,7 +69,21 @@ setup_storage() {
   mkdir -p "$DATA_DIR"
 
   if [[ ! -f "$img_path" ]]; then
-    truncate -s 50G "$img_path"
+    # Calculate recommended size (80% of available space)
+    local available_gb=$(df -BG /var/lib --output=avail | tail -1 | tr -d ' G')
+    local recommended=$((available_gb * 80 / 100))
+
+    # Enforce bounds
+    if [[ $recommended -lt 20 ]]; then
+      die "Insufficient disk space. Need at least 25GB free, found ${available_gb}GB"
+    fi
+    [[ $recommended -gt 4096 ]] && recommended=4096
+
+    # Allow override via env var, default to auto-calculated
+    local size="${STORAGE_SIZE:-${recommended}G}"
+
+    log "Creating ${size} btrfs storage pool (${available_gb}GB available on host)..."
+    truncate -s "$size" "$img_path"
     mkfs.btrfs "$img_path"
   fi
 
