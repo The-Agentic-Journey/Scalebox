@@ -6,7 +6,7 @@ Transform the `scalebox` CLI into `sb` with:
 1. **Login flow** (`sb login`) that stores host + token in user-level config
 2. **Machine-readable output** (`--json` flag) for reliable test parsing
 3. **User-level installation** via one-liner (no root required for client-only install)
-4. **Test rewrite** to use CLI instead of direct HTTP API calls
+4. **Incremental test migration** to use CLI instead of direct HTTP API calls
 
 This plan also creates ADR-013 documenting the CLI authentication approach.
 
@@ -30,6 +30,15 @@ This plan also creates ADR-013 documenting the CLI authentication approach.
 - Multiple concurrent host profiles (like kubectl contexts) - single host for now
 - Shell completions - can add later
 - Compiled binary - stay with bash for simplicity
+
+---
+
+## Naming Convention
+
+- **CLI binary**: `sb` (the only place this abbreviation is used)
+- **Config directory**: `~/.config/scalebox/`
+- **Environment variables**: `SCALEBOX_HOST`, `SCALEBOX_TOKEN`, `SCALEBOX_CONFIG_DIR`, `SCALEBOX_JSON`
+- **System config**: `/etc/scalebox/config` (unchanged)
 
 ---
 
@@ -63,19 +72,19 @@ Use cases:
 The CLI reads configuration from multiple sources with clear precedence (highest to lowest):
 
 1. **CLI flags**: `--host`, `--token` (not implemented initially, reserved for future)
-2. **Environment variables**: `SB_HOST`, `SB_TOKEN`
-3. **User config file**: `~/.config/sb/config`
+2. **Environment variables**: `SCALEBOX_HOST`, `SCALEBOX_TOKEN`
+3. **User config file**: `~/.config/scalebox/config`
 4. **System config file**: `/etc/scalebox/config` (for server-side usage)
 
-The config directory can be overridden via `SB_CONFIG_DIR` environment variable, enabling isolated testing.
+The config directory can be overridden via `SCALEBOX_CONFIG_DIR` environment variable, enabling isolated testing.
 
 ### Config File Format
 
 Shell-sourceable format for simplicity:
 
 ```
-SB_HOST=https://api.example.com:8080
-SB_TOKEN=sb-abc123...
+SCALEBOX_HOST=https://api.example.com:8080
+SCALEBOX_TOKEN=sb-abc123...
 ```
 
 ### Login Flow
@@ -111,11 +120,10 @@ Token input is masked during interactive prompt. The `--token-stdin` flag reads 
 ### Negative
 
 - Two config file locations to understand (user vs system)
-- Migration needed for existing `SCALEBOX_*` environment variables
 
-### Migration
+### Backward Compatibility
 
-`SCALEBOX_URL` and `SCALEBOX_TOKEN` environment variables are supported during transition with deprecation warnings. They will be removed in a future version.
+The existing `SCALEBOX_URL` environment variable is mapped to `SCALEBOX_HOST` internally for backward compatibility.
 ```
 
 ### Verification
@@ -125,11 +133,11 @@ Token input is masked during interactive prompt. The `--token-stdin` flag reads 
 
 ---
 
-## Phase 2: Rename CLI and Add Login Flow
+## Phase 2: Create New CLI with Login Flow
 
-**Goal**: Rename `scalebox` to `sb`, add `sb login` command with config management.
+**Goal**: Create `sb` CLI with login command and config management.
 
-### Replace: `scripts/scalebox` → `scripts/sb`
+### New file: `scripts/sb`
 
 ```bash
 #!/bin/bash
@@ -137,32 +145,27 @@ set -euo pipefail
 
 # === Configuration ===
 # Config directory (can be overridden for testing)
-SB_CONFIG_DIR="${SB_CONFIG_DIR:-$HOME/.config/sb}"
-SB_CONFIG_FILE="$SB_CONFIG_DIR/config"
+SCALEBOX_CONFIG_DIR="${SCALEBOX_CONFIG_DIR:-$HOME/.config/scalebox}"
+SCALEBOX_CONFIG_FILE="$SCALEBOX_CONFIG_DIR/config"
 
 # Load config from multiple sources (in precedence order)
 load_config() {
   # 1. Environment variables (highest priority) - already set
   # 2. User config file
-  if [[ -z "${SB_HOST:-}" || -z "${SB_TOKEN:-}" ]] && [[ -f "$SB_CONFIG_FILE" ]]; then
+  if [[ -z "${SCALEBOX_HOST:-}" || -z "${SCALEBOX_TOKEN:-}" ]] && [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
-    source "$SB_CONFIG_FILE"
+    source "$SCALEBOX_CONFIG_FILE"
   fi
   # 3. System config file (lowest priority, for server-side usage)
-  if [[ -z "${SB_HOST:-}" ]] && [[ -f /etc/scalebox/config ]]; then
-    SB_HOST="http://localhost:8080"
-    if [[ -z "${SB_TOKEN:-}" ]]; then
-      SB_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
+  if [[ -z "${SCALEBOX_HOST:-}" ]] && [[ -f /etc/scalebox/config ]]; then
+    SCALEBOX_HOST="http://localhost:8080"
+    if [[ -z "${SCALEBOX_TOKEN:-}" ]]; then
+      SCALEBOX_TOKEN=$(grep -E "^API_TOKEN=" /etc/scalebox/config 2>/dev/null | cut -d= -f2- || true)
     fi
   fi
-  # 4. Legacy environment variables (with deprecation warning)
-  if [[ -n "${SCALEBOX_URL:-}" ]]; then
-    echo "Warning: SCALEBOX_URL is deprecated, use SB_HOST instead" >&2
-    SB_HOST="${SB_HOST:-$SCALEBOX_URL}"
-  fi
-  if [[ -n "${SCALEBOX_TOKEN:-}" ]]; then
-    echo "Warning: SCALEBOX_TOKEN is deprecated, use SB_TOKEN instead" >&2
-    SB_TOKEN="${SB_TOKEN:-$SCALEBOX_TOKEN}"
+  # 4. Legacy environment variable support
+  if [[ -n "${SCALEBOX_URL:-}" && -z "${SCALEBOX_HOST:-}" ]]; then
+    SCALEBOX_HOST="$SCALEBOX_URL"
   fi
 }
 
@@ -170,8 +173,8 @@ load_config() {
 die() { echo "Error: $1" >&2; exit 1; }
 need_jq() { command -v jq &>/dev/null || die "jq is required. Install with: apt install jq (or brew install jq)"; }
 need_config() {
-  [[ -n "${SB_HOST:-}" ]] || die "Not logged in. Run 'sb login' first or set SB_HOST."
-  [[ -n "${SB_TOKEN:-}" ]] || die "No token configured. Run 'sb login' first or set SB_TOKEN."
+  [[ -n "${SCALEBOX_HOST:-}" ]] || die "Not logged in. Run 'sb login' first or set SCALEBOX_HOST."
+  [[ -n "${SCALEBOX_TOKEN:-}" ]] || die "No token configured. Run 'sb login' first or set SCALEBOX_TOKEN."
 }
 
 # === API Client ===
@@ -181,9 +184,9 @@ api() {
 
   # Capture both response body and HTTP status code
   response=$(curl -sf -w "\n%{http_code}" -X "$method" \
-    -H "Authorization: Bearer $SB_TOKEN" \
+    -H "Authorization: Bearer $SCALEBOX_TOKEN" \
     -H "Content-Type: application/json" \
-    "$@" "${SB_HOST}${path}" 2>/dev/null) || {
+    "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null) || {
     # curl failed (connection error, etc)
     echo '{"error":"Connection failed","status":0}'
     return 1
@@ -207,12 +210,7 @@ api() {
 }
 
 # === Output Formatting ===
-JSON_OUTPUT="${SB_JSON:-false}"
-
-output_json() {
-  # Pass through JSON as-is
-  cat
-}
+JSON_OUTPUT="${SCALEBOX_JSON:-false}"
 
 output_table() {
   local jq_filter="$1"
@@ -294,15 +292,15 @@ cmd_login() {
   fi
 
   # Create config directory with secure permissions
-  mkdir -p "$SB_CONFIG_DIR"
-  chmod 700 "$SB_CONFIG_DIR"
+  mkdir -p "$SCALEBOX_CONFIG_DIR"
+  chmod 700 "$SCALEBOX_CONFIG_DIR"
 
   # Write config with secure permissions
   (
     umask 077
-    cat > "$SB_CONFIG_FILE" <<EOF
-SB_HOST=$host
-SB_TOKEN=$token
+    cat > "$SCALEBOX_CONFIG_FILE" <<EOF
+SCALEBOX_HOST=$host
+SCALEBOX_TOKEN=$token
 EOF
   )
 
@@ -310,8 +308,8 @@ EOF
 }
 
 cmd_logout() {
-  if [[ -f "$SB_CONFIG_FILE" ]]; then
-    rm -f "$SB_CONFIG_FILE"
+  if [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
+    rm -f "$SCALEBOX_CONFIG_FILE"
     output_message "Logged out (config removed)"
   else
     output_message "Not logged in (no config file)"
@@ -324,44 +322,44 @@ cmd_config_show() {
 
   local display_token
   if [[ "$show_token" == "true" ]]; then
-    display_token="${SB_TOKEN:-}"
+    display_token="${SCALEBOX_TOKEN:-}"
   else
     # Mask token: show first 6 and last 4 chars
-    if [[ -n "${SB_TOKEN:-}" && ${#SB_TOKEN} -gt 10 ]]; then
-      display_token="${SB_TOKEN:0:6}...${SB_TOKEN: -4}"
+    if [[ -n "${SCALEBOX_TOKEN:-}" && ${#SCALEBOX_TOKEN} -gt 10 ]]; then
+      display_token="${SCALEBOX_TOKEN:0:6}...${SCALEBOX_TOKEN: -4}"
     else
-      display_token="${SB_TOKEN:-}"
+      display_token="${SCALEBOX_TOKEN:-}"
     fi
   fi
 
   if [[ "$JSON_OUTPUT" == "true" ]]; then
     jq -n \
-      --arg host "${SB_HOST:-}" \
+      --arg host "${SCALEBOX_HOST:-}" \
       --arg token "$display_token" \
-      --arg config_dir "$SB_CONFIG_DIR" \
+      --arg config_dir "$SCALEBOX_CONFIG_DIR" \
       '{host: $host, token: $token, config_dir: $config_dir}'
   else
-    echo "Host:       ${SB_HOST:-<not set>}"
+    echo "Host:       ${SCALEBOX_HOST:-<not set>}"
     echo "Token:      ${display_token:-<not set>}"
-    echo "Config dir: $SB_CONFIG_DIR"
-    if [[ -f "$SB_CONFIG_FILE" ]]; then
-      echo "Config file: $SB_CONFIG_FILE (exists)"
+    echo "Config dir: $SCALEBOX_CONFIG_DIR"
+    if [[ -f "$SCALEBOX_CONFIG_FILE" ]]; then
+      echo "Config file: $SCALEBOX_CONFIG_FILE (exists)"
     else
-      echo "Config file: $SB_CONFIG_FILE (not found)"
+      echo "Config file: $SCALEBOX_CONFIG_FILE (not found)"
     fi
   fi
 }
 
 cmd_status() {
   local response
-  if response=$(curl -sf "${SB_HOST:-http://localhost:8080}/health" 2>/dev/null); then
+  if response=$(curl -sf "${SCALEBOX_HOST:-http://localhost:8080}/health" 2>/dev/null); then
     if [[ "$JSON_OUTPUT" == "true" ]]; then
       echo "$response" | jq -c '. + {status: 200}'
     else
       echo "$response" | jq .
     fi
   else
-    output_error "Cannot connect to ${SB_HOST:-http://localhost:8080}" 0
+    output_error "Cannot connect to ${SCALEBOX_HOST:-http://localhost:8080}" 0
   fi
 }
 
@@ -486,9 +484,9 @@ cmd_vm_wait() {
   vm_data=$(api GET "/vms/$id") || die "VM not found: $id"
   ssh_port=$(echo "$vm_data" | jq -r '.ssh_port')
 
-  # Extract host from SB_HOST (remove protocol and port)
+  # Extract host from SCALEBOX_HOST (remove protocol and port)
   local ssh_host
-  ssh_host=$(echo "$SB_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||')
+  ssh_host=$(echo "$SCALEBOX_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||')
 
   local start=$SECONDS
   while (( SECONDS - start < timeout )); do
@@ -560,10 +558,10 @@ Commands:
   help                          Show this help
 
 Environment Variables:
-  SB_HOST         API host URL (overrides config file)
-  SB_TOKEN        API token (overrides config file)
-  SB_CONFIG_DIR   Config directory (default: ~/.config/sb)
-  SB_JSON=true    Always output JSON
+  SCALEBOX_HOST        API host URL (overrides config file)
+  SCALEBOX_TOKEN       API token (overrides config file)
+  SCALEBOX_CONFIG_DIR  Config directory (default: ~/.config/scalebox)
+  SCALEBOX_JSON=true   Always output JSON
 
 Examples:
   sb login
@@ -671,6 +669,24 @@ install_cli() {
 }
 ```
 
+Update the preflight check:
+
+```bash
+# === Pre-flight Check ===
+preflight_check() {
+  log "Running pre-flight checks..."
+  local missing=()
+
+  [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
+  [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
+  [[ -f "$INSTALL_DIR/sb" ]] || missing+=("sb CLI")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    die "Missing required files in $INSTALL_DIR: ${missing[*]}"
+  fi
+}
+```
+
 Update the completion message at the end of `main()`:
 
 ```bash
@@ -706,12 +722,12 @@ User-level installer for client-only installation:
 #
 set -euo pipefail
 
-INSTALL_DIR="${SB_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${SCALEBOX_INSTALL_DIR:-$HOME/.local/bin}"
 REPO="anthropics/scalebox"
 RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
 
-log() { echo "[sb] $1"; }
-die() { echo "[sb] ERROR: $1" >&2; exit 1; }
+log() { echo "[scalebox] $1"; }
+die() { echo "[scalebox] ERROR: $1" >&2; exit 1; }
 
 # Check for required tools
 check_deps() {
@@ -801,7 +817,7 @@ setup_path() {
     if [[ -n "$shell_rc" && -f "$shell_rc" ]]; then
       if ! grep -q "$INSTALL_DIR" "$shell_rc" 2>/dev/null; then
         echo "" >> "$shell_rc"
-        echo "# Added by sb installer" >> "$shell_rc"
+        echo "# Added by Scalebox CLI installer" >> "$shell_rc"
         echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$shell_rc"
         log "Added PATH to $shell_rc"
       fi
@@ -851,7 +867,7 @@ main "$@"
 
 ```bash
 # Test user installer locally
-SB_INSTALL_DIR=/tmp/sb-test bash scripts/install-sb.sh
+SCALEBOX_INSTALL_DIR=/tmp/sb-test bash scripts/install-sb.sh
 /tmp/sb-test/sb version
 rm -rf /tmp/sb-test
 ```
@@ -898,24 +914,6 @@ do_build() {
 }
 ```
 
-Update the preflight check in `install.sh`:
-
-```bash
-# === Pre-flight Check ===
-preflight_check() {
-  log "Running pre-flight checks..."
-  local missing=()
-
-  [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
-  [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
-  [[ -f "$INSTALL_DIR/sb" ]] || missing+=("sb CLI")
-
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    die "Missing required files in $INSTALL_DIR: ${missing[*]}"
-  fi
-}
-```
-
 ### Verification
 
 ```bash
@@ -926,60 +924,29 @@ ls builds/
 
 ---
 
-## Phase 5: Rewrite Tests to Use CLI
+## Phase 5: Add CLI Test Helpers (Non-Breaking)
 
-**Goal**: Replace direct HTTP API calls with `sb` CLI commands.
+**Goal**: Add CLI helper functions to `test/helpers.ts` WITHOUT removing any existing functions. All 19 existing tests continue to pass unchanged.
 
 ### Modify: `test/helpers.ts`
 
+Add the following NEW exports at the end of the file (keep all existing code):
+
 ```typescript
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { $ } from "bun";
+// === NEW: CLI Test Helpers ===
+// These are added alongside existing HTTP helpers for incremental test migration.
+
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-const FIXTURES_DIR = join(import.meta.dir, "fixtures");
-
-// Configuration
-export const VM_HOST = process.env.VM_HOST || "localhost";
-export const API_PORT = process.env.API_PORT || "8080";
-export const API_TOKEN = process.env.API_TOKEN || "dev-token";
-
-// SSH
-export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
-export const TEST_PUBLIC_KEY_PATH = join(FIXTURES_DIR, "test_key.pub");
-export const TEST_PUBLIC_KEY = readFileSync(TEST_PUBLIC_KEY_PATH, "utf-8").trim();
-
 // CLI configuration
-let sbConfigDir: string | null = null;
+let cliConfigDir: string | null = null;
 
-// Initialize CLI with isolated config directory
-export async function initCli(): Promise<void> {
-  // Create isolated config directory for tests
-  sbConfigDir = await mkdtemp(join(tmpdir(), "sb-test-"));
-
-  // Run sb login
-  const host = `http://${VM_HOST}:${API_PORT}`;
-  const result = await $`echo ${API_TOKEN} | SB_CONFIG_DIR=${sbConfigDir} ${getSbPath()} login --host ${host} --token-stdin`.quiet();
-
-  if (result.exitCode !== 0) {
-    throw new Error(`sb login failed: ${result.stderr.toString()}`);
-  }
-}
-
-// Cleanup CLI config
-export async function cleanupCli(): Promise<void> {
-  if (sbConfigDir) {
-    await rm(sbConfigDir, { recursive: true, force: true });
-    sbConfigDir = null;
-  }
-}
+// Path to test public key file
+export const TEST_PUBLIC_KEY_PATH = join(FIXTURES_DIR, "test_key.pub");
 
 // Get path to sb binary
 function getSbPath(): string {
-  // In CI, sb is installed to /usr/local/bin
-  // Locally, use the built version
   const localPath = join(import.meta.dir, "..", "builds", "sb");
   try {
     readFileSync(localPath);
@@ -989,15 +956,33 @@ function getSbPath(): string {
   }
 }
 
+// Initialize CLI with isolated config directory
+export async function initCli(): Promise<void> {
+  cliConfigDir = await mkdtemp(join(tmpdir(), "scalebox-test-"));
+  const host = `http://${VM_HOST}:${API_PORT}`;
+  const result = await $`echo ${API_TOKEN} | SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} login --host ${host} --token-stdin`.quiet();
+  if (result.exitCode !== 0) {
+    throw new Error(`sb login failed: ${result.stderr.toString()}`);
+  }
+}
+
+// Cleanup CLI config
+export async function cleanupCli(): Promise<void> {
+  if (cliConfigDir) {
+    await rm(cliConfigDir, { recursive: true, force: true });
+    cliConfigDir = null;
+  }
+}
+
 // Execute sb command and return parsed JSON
-export async function sb(
+export async function sbCmd(
   ...args: string[]
 ): Promise<{ exitCode: number; data: Record<string, unknown> | null; error: string | null }> {
-  if (!sbConfigDir) {
+  if (!cliConfigDir) {
     throw new Error("CLI not initialized. Call initCli() first.");
   }
 
-  const result = await $`SB_CONFIG_DIR=${sbConfigDir} ${getSbPath()} --json ${args}`.quiet().nothrow();
+  const result = await $`SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} --json ${args}`.quiet().nothrow();
 
   const stdout = result.stdout.toString().trim();
   const stderr = result.stderr.toString().trim();
@@ -1008,7 +993,6 @@ export async function sb(
   if (stdout) {
     try {
       data = JSON.parse(stdout);
-      // Check if response contains error
       if (data && typeof data === "object" && "error" in data) {
         error = data.error as string;
       }
@@ -1024,9 +1008,9 @@ export async function sb(
   return { exitCode: result.exitCode, data, error };
 }
 
-// Convenience functions for common operations
+// Convenience functions for CLI operations
 export async function sbVmCreate(template: string): Promise<Record<string, unknown>> {
-  const result = await sb("vm", "create", "-t", template, "-k", `@${TEST_PUBLIC_KEY_PATH}`);
+  const result = await sbCmd("vm", "create", "-t", template, "-k", `@${TEST_PUBLIC_KEY_PATH}`);
   if (result.exitCode !== 0 || !result.data) {
     throw new Error(`Failed to create VM: ${result.error}`);
   }
@@ -1034,14 +1018,14 @@ export async function sbVmCreate(template: string): Promise<Record<string, unkno
 }
 
 export async function sbVmDelete(nameOrId: string): Promise<void> {
-  const result = await sb("vm", "delete", nameOrId);
+  const result = await sbCmd("vm", "delete", nameOrId);
   if (result.exitCode !== 0) {
     throw new Error(`Failed to delete VM: ${result.error}`);
   }
 }
 
 export async function sbVmGet(nameOrId: string): Promise<Record<string, unknown> | null> {
-  const result = await sb("vm", "get", nameOrId);
+  const result = await sbCmd("vm", "get", nameOrId);
   if (result.exitCode !== 0) {
     return null;
   }
@@ -1049,7 +1033,7 @@ export async function sbVmGet(nameOrId: string): Promise<Record<string, unknown>
 }
 
 export async function sbVmList(): Promise<Record<string, unknown>[]> {
-  const result = await sb("vm", "list");
+  const result = await sbCmd("vm", "list");
   if (result.exitCode !== 0 || !result.data) {
     throw new Error(`Failed to list VMs: ${result.error}`);
   }
@@ -1057,14 +1041,14 @@ export async function sbVmList(): Promise<Record<string, unknown>[]> {
 }
 
 export async function sbVmWait(nameOrId: string, timeoutSec: number = 60): Promise<void> {
-  const result = await sb("vm", "wait", nameOrId, "--ssh", "--timeout", String(timeoutSec));
+  const result = await sbCmd("vm", "wait", nameOrId, "--ssh", "--timeout", String(timeoutSec));
   if (result.exitCode !== 0) {
     throw new Error(`Failed waiting for SSH: ${result.error}`);
   }
 }
 
 export async function sbVmSnapshot(nameOrId: string, templateName: string): Promise<Record<string, unknown>> {
-  const result = await sb("vm", "snapshot", nameOrId, "-n", templateName);
+  const result = await sbCmd("vm", "snapshot", nameOrId, "-n", templateName);
   if (result.exitCode !== 0 || !result.data) {
     throw new Error(`Failed to snapshot VM: ${result.error}`);
   }
@@ -1072,7 +1056,7 @@ export async function sbVmSnapshot(nameOrId: string, templateName: string): Prom
 }
 
 export async function sbTemplateList(): Promise<Record<string, unknown>[]> {
-  const result = await sb("template", "list");
+  const result = await sbCmd("template", "list");
   if (result.exitCode !== 0 || !result.data) {
     throw new Error(`Failed to list templates: ${result.error}`);
   }
@@ -1080,244 +1064,19 @@ export async function sbTemplateList(): Promise<Record<string, unknown>[]> {
 }
 
 export async function sbTemplateDelete(name: string): Promise<void> {
-  const result = await sb("template", "delete", name);
+  const result = await sbCmd("template", "delete", name);
   if (result.exitCode !== 0) {
     throw new Error(`Failed to delete template: ${result.error}`);
   }
 }
 
 export async function sbStatus(): Promise<Record<string, unknown>> {
-  const result = await sb("status");
+  const result = await sbCmd("status");
   if (result.exitCode !== 0 || !result.data) {
     throw new Error(`Failed to get status: ${result.error}`);
   }
   return result.data;
 }
-
-// SSH execution (still needed for actual SSH commands to VMs)
-export async function sshExec(sshPort: number, command: string): Promise<string> {
-  return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
-}
-
-// Legacy API client for auth tests that need raw HTTP access
-const API_BASE_URL = `http://${VM_HOST}:${API_PORT}`;
-
-export const api = {
-  async getRaw(path: string, token?: string) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    return { status: res.status };
-  },
-};
-```
-
-### Replace: `test/integration.test.ts`
-
-```typescript
-import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
-import {
-  initCli,
-  cleanupCli,
-  sb,
-  sbVmCreate,
-  sbVmDelete,
-  sbVmGet,
-  sbVmList,
-  sbVmWait,
-  sbVmSnapshot,
-  sbTemplateList,
-  sbTemplateDelete,
-  sbStatus,
-  sshExec,
-  api,
-  TEST_PUBLIC_KEY,
-  VM_HOST,
-  API_PORT,
-  API_TOKEN,
-} from "./helpers";
-
-// Track VMs and templates for cleanup
-const createdVms: string[] = [];
-const createdTemplates: string[] = [];
-
-beforeAll(async () => {
-  await initCli();
-});
-
-afterAll(async () => {
-  await cleanupCli();
-});
-
-afterEach(async () => {
-  // Cleanup VMs
-  for (const vm of createdVms) {
-    try {
-      await sbVmDelete(vm);
-    } catch {
-      // Ignore cleanup errors
-    }
-  }
-  createdVms.length = 0;
-
-  // Cleanup templates
-  for (const template of createdTemplates) {
-    try {
-      await sbTemplateDelete(template);
-    } catch {
-      // Ignore cleanup errors
-    }
-  }
-  createdTemplates.length = 0;
-});
-
-describe("Health Check", () => {
-  test("status returns healthy", async () => {
-    const status = await sbStatus();
-    expect(status.status).toBe(200);
-  });
-});
-
-describe("Authentication", () => {
-  test("rejects missing token", async () => {
-    const res = await api.getRaw("/vms");
-    expect(res.status).toBe(401);
-  });
-
-  test("rejects invalid token", async () => {
-    const res = await api.getRaw("/vms", "invalid-token");
-    expect(res.status).toBe(401);
-  });
-});
-
-describe("Templates", () => {
-  test("lists templates including debian-base", async () => {
-    const templates = await sbTemplateList();
-    expect(templates.length).toBeGreaterThan(0);
-
-    const names = templates.map((t) => t.name);
-    expect(names).toContain("debian-base");
-  });
-
-  test("cannot delete protected template", async () => {
-    const result = await sb("template", "delete", "debian-base");
-    expect(result.exitCode).not.toBe(0);
-    expect(result.data?.status).toBe(403);
-  });
-});
-
-describe("VM Lifecycle", () => {
-  test("creates VM from template", async () => {
-    const vm = await sbVmCreate("debian-base");
-    createdVms.push(vm.name as string);
-
-    expect(vm.id).toBeDefined();
-    expect(vm.name).toBeDefined();
-    expect(vm.template).toBe("debian-base");
-    expect(vm.ip).toMatch(/^172\.16\./);
-    expect(vm.ssh_port).toBeGreaterThanOrEqual(22001);
-  });
-
-  test("lists created VM", async () => {
-    const vm = await sbVmCreate("debian-base");
-    createdVms.push(vm.name as string);
-
-    const vms = await sbVmList();
-    const found = vms.find((v) => v.id === vm.id);
-    expect(found).toBeDefined();
-  });
-
-  test("gets VM by name", async () => {
-    const vm = await sbVmCreate("debian-base");
-    createdVms.push(vm.name as string);
-
-    const fetched = await sbVmGet(vm.name as string);
-    expect(fetched).toBeDefined();
-    expect(fetched?.id).toBe(vm.id);
-  });
-
-  test("deletes VM", async () => {
-    const vm = await sbVmCreate("debian-base");
-
-    await sbVmDelete(vm.name as string);
-
-    const fetched = await sbVmGet(vm.name as string);
-    expect(fetched).toBeNull();
-  });
-});
-
-describe("SSH Access", () => {
-  test(
-    "can SSH to VM via proxy port",
-    async () => {
-      const vm = await sbVmCreate("debian-base");
-      createdVms.push(vm.name as string);
-
-      await sbVmWait(vm.name as string, 60);
-
-      const output = await sshExec(vm.ssh_port as number, "echo hello");
-      expect(output.trim()).toBe("hello");
-    },
-    { timeout: 90000 }
-  );
-});
-
-describe("Snapshots", () => {
-  test(
-    "creates template from VM snapshot",
-    async () => {
-      const vm = await sbVmCreate("debian-base");
-      createdVms.push(vm.name as string);
-
-      await sbVmWait(vm.name as string, 60);
-
-      const templateName = `test-snapshot-${Date.now()}`;
-      createdTemplates.push(templateName);
-
-      const snapshot = await sbVmSnapshot(vm.name as string, templateName);
-      expect(snapshot.name).toBe(templateName);
-
-      // Verify template exists
-      const templates = await sbTemplateList();
-      const found = templates.find((t) => t.name === templateName);
-      expect(found).toBeDefined();
-    },
-    { timeout: 180000 }
-  );
-
-  test(
-    "snapshot preserves filesystem state",
-    async () => {
-      // Create VM and write a file
-      const vm1 = await sbVmCreate("debian-base");
-      createdVms.push(vm1.name as string);
-
-      await sbVmWait(vm1.name as string, 60);
-
-      const testContent = `test-${Date.now()}`;
-      await sshExec(vm1.ssh_port as number, `echo '${testContent}' > /root/testfile`);
-
-      // Create snapshot
-      const templateName = `test-state-${Date.now()}`;
-      createdTemplates.push(templateName);
-
-      await sbVmSnapshot(vm1.name as string, templateName);
-
-      // Create new VM from snapshot
-      const result = await sb("vm", "create", "-t", templateName, "-k", `@${process.env.HOME}/.ssh/id_rsa.pub || echo '${TEST_PUBLIC_KEY}'`);
-      // Use the test key directly
-      const vm2 = await sbVmCreate(templateName);
-      createdVms.push(vm2.name as string);
-
-      await sbVmWait(vm2.name as string, 60);
-
-      // Verify file exists with same content
-      const content = await sshExec(vm2.ssh_port as number, "cat /root/testfile");
-      expect(content.trim()).toBe(testContent);
-    },
-    { timeout: 300000 }
-  );
-});
 ```
 
 ### Verification
@@ -1325,25 +1084,257 @@ describe("Snapshots", () => {
 ```bash
 ./do lint
 ./do check
+# All 19 existing tests must pass - no tests are changed yet
 ```
 
 ---
 
-## Phase 6: Remove Old CLI
+## Phase 6: Migrate Tests Incrementally
 
-**Goal**: Delete old `scripts/scalebox` file.
+**Goal**: Migrate each test one at a time from HTTP API to CLI. Each sub-phase modifies exactly ONE test while all other tests remain unchanged.
+
+### Current Tests (19 total)
+
+| # | Test Name | Migration Target |
+|---|-----------|------------------|
+| 1 | health check returns ok | `sbStatus()` |
+| 2 | auth rejects missing token | Keep HTTP (tests raw auth) |
+| 3 | auth rejects invalid token | Keep HTTP (tests raw auth) |
+| 4 | lists templates | `sbTemplateList()` |
+| 5 | debian-base template exists | `sbTemplateList()` |
+| 6 | delete protected template returns 403 | `sbCmd("template", "delete", ...)` |
+| 7 | delete nonexistent template returns 404 | `sbCmd("template", "delete", ...)` |
+| 8 | create VM returns valid response | `sbVmCreate()` |
+| 9 | created VM appears in list | `sbVmCreate()` + `sbVmList()` |
+| 10 | get VM by id returns details | `sbVmCreate()` + `sbVmGet()` |
+| 11 | delete VM returns 204 | `sbVmCreate()` + `sbVmDelete()` |
+| 12 | deleted VM not in list | `sbVmDelete()` + `sbVmList()` |
+| 13 | VM becomes reachable via SSH | `sbVmCreate()` + `sbVmWait()` |
+| 14 | can execute command via SSH | `sbVmCreate()` + `sbVmWait()` + `sshExec()` |
+| 15 | snapshot VM creates template | `sbVmSnapshot()` |
+| 16 | snapshot appears in template list | `sbVmSnapshot()` + `sbTemplateList()` |
+| 17 | can create VM from snapshot | `sbVmSnapshot()` + `sbVmCreate()` |
+| 18 | snapshot preserves filesystem state | `sbVmSnapshot()` + `sbVmCreate()` + `sshExec()` |
+| 19 | can delete snapshot template | `sbVmSnapshot()` + `sbTemplateDelete()` |
+
+### Phase 6.1: Add CLI lifecycle hooks
+
+**Goal**: Add `beforeAll`/`afterAll` for CLI initialization without changing any tests.
+
+```typescript
+// Add at the top of describe block, after createdVmIds/createdTemplates declarations:
+beforeAll(async () => {
+  await initCli();
+});
+
+afterAll(async () => {
+  await cleanupCli();
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.2: Migrate "health check returns ok"
+
+**Change test from**:
+```typescript
+test("health check returns ok", async () => {
+  const res = await fetch(`${API_BASE_URL}/health`);
+  expect(res.status).toBe(200);
+  const data = await res.json();
+  expect(data.status).toBe("ok");
+});
+```
+
+**To**:
+```typescript
+test("health check returns ok", async () => {
+  const status = await sbStatus();
+  expect(status.status).toBe(200);
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.3: Migrate "lists templates"
+
+**Change test from**:
+```typescript
+test("lists templates", async () => {
+  const { status, data } = await api.get("/templates");
+  expect(status).toBe(200);
+  expect(Array.isArray(data.templates)).toBe(true);
+});
+```
+
+**To**:
+```typescript
+test("lists templates", async () => {
+  const templates = await sbTemplateList();
+  expect(Array.isArray(templates)).toBe(true);
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.4: Migrate "debian-base template exists"
+
+**Change test from**:
+```typescript
+test("debian-base template exists", async () => {
+  const { data } = await api.get("/templates");
+  const names = data.templates.map((t: { name: string }) => t.name);
+  expect(names).toContain("debian-base");
+});
+```
+
+**To**:
+```typescript
+test("debian-base template exists", async () => {
+  const templates = await sbTemplateList();
+  const names = templates.map((t) => t.name);
+  expect(names).toContain("debian-base");
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.5: Migrate "delete protected template returns 403"
+
+**Change test from**:
+```typescript
+test("delete protected template returns 403", async () => {
+  const { status } = await api.delete("/templates/debian-base");
+  expect(status).toBe(403);
+});
+```
+
+**To**:
+```typescript
+test("delete protected template returns 403", async () => {
+  const result = await sbCmd("template", "delete", "debian-base");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.data?.status).toBe(403);
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.6: Migrate "delete nonexistent template returns 404"
+
+**Change test from**:
+```typescript
+test("delete nonexistent template returns 404", async () => {
+  const { status } = await api.delete("/templates/does-not-exist");
+  expect(status).toBe(404);
+});
+```
+
+**To**:
+```typescript
+test("delete nonexistent template returns 404", async () => {
+  const result = await sbCmd("template", "delete", "does-not-exist");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.data?.status).toBe(404);
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.7: Migrate "create VM returns valid response"
+
+**Change test from**:
+```typescript
+test("create VM returns valid response", async () => {
+  const { status, data } = await api.post("/vms", {
+    template: "debian-base",
+    name: "test-vm",
+    ssh_public_key: TEST_PUBLIC_KEY,
+  });
+  if (data?.id) createdVmIds.push(data.id);
+
+  expect(status).toBe(201);
+  expect(data.id).toMatch(/^vm-[a-f0-9]{12}$/);
+  expect(data.template).toBe("debian-base");
+  expect(data.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+  expect(data.ssh_port).toBeGreaterThan(22000);
+});
+```
+
+**To**:
+```typescript
+test("create VM returns valid response", async () => {
+  const vm = await sbVmCreate("debian-base");
+  if (vm?.id) createdVmIds.push(vm.id as string);
+
+  expect(vm.id).toMatch(/^vm-[a-f0-9]{12}$/);
+  expect(vm.name).toBeDefined();
+  expect(vm.template).toBe("debian-base");
+  expect(vm.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+  expect(vm.ssh_port).toBeGreaterThan(22000);
+});
+```
+
+**Verification**: `./do check` - all 19 tests pass
+
+### Phase 6.8 through 6.19: Continue for remaining tests
+
+Each subsequent phase follows the same pattern:
+1. Identify the test to migrate
+2. Replace HTTP API calls with CLI helper calls
+3. Verify all 19 tests still pass
+
+**Tests to migrate in order**:
+- 6.8: "created VM appears in list"
+- 6.9: "get VM by id returns details"
+- 6.10: "delete VM returns 204"
+- 6.11: "deleted VM not in list"
+- 6.12: "VM becomes reachable via SSH"
+- 6.13: "can execute command via SSH"
+- 6.14: "snapshot VM creates template"
+- 6.15: "snapshot appears in template list"
+- 6.16: "can create VM from snapshot"
+- 6.17: "snapshot preserves filesystem state"
+- 6.18: "can delete snapshot template"
+
+**Tests kept with HTTP API** (tests 2, 3):
+- "auth rejects missing token" - requires raw HTTP without auth header
+- "auth rejects invalid token" - requires raw HTTP with invalid token
+
+---
+
+## Phase 7: Remove Old CLI and Unused HTTP Helpers
+
+**Goal**: Clean up after all tests are migrated.
+
+### Delete: `scripts/scalebox`
 
 ```bash
 rm scripts/scalebox
 ```
 
-Update any remaining references in documentation.
+### Modify: `test/helpers.ts`
+
+Remove unused HTTP helper functions (keep only `api.getRaw` for auth tests):
+
+```typescript
+// Remove these functions:
+// - api.get()
+// - api.post()
+// - api.delete()
+
+// Keep these:
+// - api.getRaw() (for auth tests)
+// - All CLI helpers (sbCmd, sbVmCreate, etc.)
+// - sshExec, waitForSsh (still used for SSH operations)
+```
 
 ### Verification
 
 ```bash
-# Ensure scalebox is not referenced (except in migration notes)
-grep -r "scalebox" --include="*.md" --include="*.ts" --include="*.sh" | grep -v "backward\|symlink\|deprecated\|PLAN"
+./do lint
+./do check
+# All tests pass
 ```
 
 ---
@@ -1355,11 +1346,11 @@ grep -r "scalebox" --include="*.md" --include="*.ts" --include="*.sh" | grep -v 
 | `product/ADR/013-cli-authentication.md` | Create | Document CLI auth architecture |
 | `scripts/sb` | Create | New CLI with login flow |
 | `scripts/install-sb.sh` | Create | User-level installer |
-| `scripts/scalebox` | Delete | Replaced by sb |
+| `scripts/scalebox` | Delete (Phase 7) | Replaced by sb |
 | `scripts/install.sh` | Modify | Install sb, create symlink |
 | `do` | Modify | Build sb instead of scalebox |
-| `test/helpers.ts` | Replace | CLI-based test helpers |
-| `test/integration.test.ts` | Replace | Tests using CLI |
+| `test/helpers.ts` | Modify | Add CLI helpers, later remove unused HTTP helpers |
+| `test/integration.test.ts` | Modify | Migrate tests one at a time |
 
 ---
 
@@ -1367,20 +1358,20 @@ grep -r "scalebox" --include="*.md" --include="*.ts" --include="*.sh" | grep -v 
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `SB_HOST` | API server URL | (from config or localhost) |
-| `SB_TOKEN` | API token | (from config) |
-| `SB_CONFIG_DIR` | Config directory | `~/.config/sb` |
-| `SB_JSON` | Always output JSON | `false` |
+| `SCALEBOX_HOST` | API server URL | (from config or localhost) |
+| `SCALEBOX_TOKEN` | API token | (from config) |
+| `SCALEBOX_CONFIG_DIR` | Config directory | `~/.config/scalebox` |
+| `SCALEBOX_JSON` | Always output JSON | `false` |
+| `SCALEBOX_URL` | Legacy (maps to SCALEBOX_HOST) | - |
 
 ---
 
 ## Config Precedence
 
 1. CLI flags (reserved for future)
-2. `SB_*` environment variables
-3. `~/.config/sb/config`
+2. `SCALEBOX_*` environment variables
+3. `~/.config/scalebox/config`
 4. `/etc/scalebox/config` (server-side fallback)
-5. `SCALEBOX_*` env vars (deprecated, with warning)
 
 ---
 
@@ -1394,45 +1385,9 @@ grep -r "scalebox" --include="*.md" --include="*.ts" --include="*.sh" | grep -v 
 | 2 | `bash -n scripts/sb && ./scripts/sb help` | Valid bash, help shows |
 | 3 | `bash -n scripts/install-sb.sh` | Valid bash |
 | 4 | `./do build && ls builds/` | sb in builds/ |
-| 5 | `./do check` | All tests pass |
-| 6 | `ls scripts/scalebox` | File not found |
-
-### End-to-End Verification
-
-```bash
-# Build
-./do build
-
-# Create test VM
-./do check --keep-vm
-
-# SSH to VM
-gcloud compute ssh scalebox-test-XXXXX --zone=us-central1-a
-
-# Test CLI on server (uses /etc/scalebox/config automatically)
-sb status
-sb vm list
-sb vm create -t debian-base -k "$(cat ~/.ssh/authorized_keys | head -1)"
-sb vm list
-sb vm delete <name>
-
-# Test remote client workflow
-exit  # back to local machine
-
-# Get VM IP
-VM_IP=$(gcloud compute instances describe scalebox-test-XXXXX --zone=us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
-
-# Login from local machine
-./builds/sb login --host "http://$VM_IP:8080" --token-stdin <<< "$(gcloud compute ssh scalebox-test-XXXXX --zone=us-central1-a --command='sudo grep API_TOKEN /etc/scalebox/config | cut -d= -f2-' --quiet)"
-
-# Use CLI remotely
-./builds/sb status
-./builds/sb vm list
-
-# Cleanup
-./builds/sb logout
-gcloud compute instances delete scalebox-test-XXXXX --zone=us-central1-a --quiet
-```
+| 5 | `./do check` | All 19 tests pass (no changes to tests) |
+| 6.1-6.19 | `./do check` | All 19 tests pass (after each sub-phase) |
+| 7 | `./do check` | All tests pass, scalebox removed |
 
 ---
 
@@ -1442,14 +1397,15 @@ gcloud compute instances delete scalebox-test-XXXXX --zone=us-central1-a --quiet
 |------|------------|
 | Token in shell history | `--token-stdin` reads from stdin, not args |
 | Config file permissions | Created with umask 077, chmod 600 |
-| Tests affect user config | `SB_CONFIG_DIR` isolates test config |
+| Tests affect user config | `SCALEBOX_CONFIG_DIR` isolates test config |
 | jq not installed | User installer downloads static jq binary |
 | PATH not set | Installer adds to .bashrc/.zshrc |
-| Backward compat breaks | `scalebox` symlink, `SCALEBOX_*` env vars with warnings |
+| Backward compat breaks | `scalebox` symlink for CLI |
 | JSON parsing fragile | Structured `--json` output with consistent format |
 | SSH wait timeout | Configurable `--timeout` flag |
 | Test cleanup fails | Track created resources, cleanup in afterEach |
 | nc not available | Fallback to curl-based port check |
+| Incremental migration breaks | Each phase verified independently |
 
 ---
 
@@ -1457,7 +1413,7 @@ gcloud compute instances delete scalebox-test-XXXXX --zone=us-central1-a --quiet
 
 For existing users:
 
-1. **Environment variables**: Replace `SCALEBOX_URL` with `SB_HOST`, `SCALEBOX_TOKEN` with `SB_TOKEN`
+1. **Environment variables**: `SCALEBOX_URL` continues to work (mapped to `SCALEBOX_HOST`)
 2. **CLI command**: `scalebox` still works (symlink) but `sb` is preferred
 3. **Scripts**: Update to use `sb` for new scripts
-4. **Config**: Run `sb login` to create user config, or continue using env vars
+4. **Config**: Run `sb login` to create user config at `~/.config/scalebox/config`
