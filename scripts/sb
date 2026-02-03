@@ -41,17 +41,26 @@ api() {
   local response http_code
 
   # Capture both response body and HTTP status code
-  response=$(curl -sf -w "\n%{http_code}" -X "$method" \
+  # Note: Don't use -f flag as it prevents capturing error response bodies
+  response=$(curl -s -w "\n%{http_code}" -X "$method" \
     -H "Authorization: Bearer $SCALEBOX_TOKEN" \
     -H "Content-Type: application/json" \
-    "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null) || {
-    # curl failed (connection error, etc)
+    "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null)
+
+  # Check if curl itself failed (connection error, etc)
+  if [[ -z "$response" ]]; then
     echo '{"error":"Connection failed","status":0}'
     return 1
-  }
+  fi
 
   http_code=$(echo "$response" | tail -n1)
   response=$(echo "$response" | sed '$d')
+
+  # Validate we got a numeric HTTP code
+  if ! [[ "$http_code" =~ ^[0-9]+$ ]]; then
+    echo '{"error":"Connection failed","status":0}'
+    return 1
+  fi
 
   if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
     echo "$response"

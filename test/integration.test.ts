@@ -5,6 +5,10 @@ import {
 	api,
 	cleanupCli,
 	initCli,
+	sbCmd,
+	sbStatus,
+	sbTemplateList,
+	sbVmCreate,
 	sshExec,
 	waitForSsh,
 } from "./helpers";
@@ -40,10 +44,8 @@ describe("Firecracker API", () => {
 
 	// === Phase 2: Health & Auth ===
 	test("health check returns ok", async () => {
-		const res = await fetch(`${API_BASE_URL}/health`);
-		expect(res.status).toBe(200);
-		const data = await res.json();
-		expect(data.status).toBe("ok");
+		const status = await sbStatus();
+		expect(status.status).toBe(200);
 	});
 	test("auth rejects missing token", async () => {
 		const { status } = await api.getRaw("/templates");
@@ -57,41 +59,38 @@ describe("Firecracker API", () => {
 
 	// === Phase 3: Templates ===
 	test("lists templates", async () => {
-		const { status, data } = await api.get("/templates");
-		expect(status).toBe(200);
-		expect(Array.isArray(data.templates)).toBe(true);
+		const templates = await sbTemplateList();
+		expect(Array.isArray(templates)).toBe(true);
 	});
 
 	test("debian-base template exists", async () => {
-		const { data } = await api.get("/templates");
-		const names = data.templates.map((t: { name: string }) => t.name);
+		const templates = await sbTemplateList();
+		const names = templates.map((t) => t.name);
 		expect(names).toContain("debian-base");
 	});
 
 	test("delete protected template returns 403", async () => {
-		const { status } = await api.delete("/templates/debian-base");
-		expect(status).toBe(403);
+		const result = await sbCmd("template", "delete", "debian-base");
+		expect(result.exitCode).not.toBe(0);
+		expect(result.data?.status).toBe(403);
 	});
 
 	test("delete nonexistent template returns 404", async () => {
-		const { status } = await api.delete("/templates/does-not-exist");
-		expect(status).toBe(404);
+		const result = await sbCmd("template", "delete", "does-not-exist");
+		expect(result.exitCode).not.toBe(0);
+		expect(result.data?.status).toBe(404);
 	});
 
 	// === Phase 4: VM Lifecycle ===
 	test("create VM returns valid response", async () => {
-		const { status, data } = await api.post("/vms", {
-			template: "debian-base",
-			name: "test-vm",
-			ssh_public_key: TEST_PUBLIC_KEY,
-		});
-		if (data?.id) createdVmIds.push(data.id);
+		const vm = await sbVmCreate("debian-base");
+		if (vm?.id) createdVmIds.push(vm.id as string);
 
-		expect(status).toBe(201);
-		expect(data.id).toMatch(/^vm-[a-f0-9]{12}$/);
-		expect(data.template).toBe("debian-base");
-		expect(data.ip).toMatch(/^172\.16\.\d+\.\d+$/);
-		expect(data.ssh_port).toBeGreaterThan(22000);
+		expect(vm.id).toMatch(/^vm-[a-f0-9]{12}$/);
+		expect(vm.name).toBeDefined();
+		expect(vm.template).toBe("debian-base");
+		expect(vm.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+		expect(vm.ssh_port).toBeGreaterThan(22000);
 	});
 
 	test("created VM appears in list", async () => {
