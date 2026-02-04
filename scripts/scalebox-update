@@ -167,6 +167,7 @@ main() {
   if health_check; then
     cleanup
     log "Update complete!"
+    exit 0
   else
     log "Health check failed after update"
     rollback
