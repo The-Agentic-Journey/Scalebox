@@ -278,7 +278,10 @@ do_build() {
   cp scripts/scaleboxd.service builds/
   cp scripts/scalebox-update builds/
 
-  chmod +x builds/scaleboxd builds/sb builds/install.sh builds/install-sb.sh builds/scalebox-update
+  # Backward compatibility: include scalebox as copy of sb for old scalebox-update scripts
+  cp scripts/sb builds/scalebox
+
+  chmod +x builds/scaleboxd builds/sb builds/scalebox builds/install.sh builds/install-sb.sh builds/scalebox-update
 
   echo "==> Build complete"
   ls -la builds/
