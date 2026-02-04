@@ -82,11 +82,12 @@ install_new() {
   # Backward compatibility symlink
   ln -sf "$SB_CLI" "$SCALEBOX_CLI"
 
-  # Update scalebox-update itself
+  # Update scalebox-update itself (use atomic mv to avoid corrupting running script)
   if [[ -f "$temp_dir/scalebox-update" ]]; then
     log "Installing new scalebox-update..."
-    cp "$temp_dir/scalebox-update" "/usr/local/bin/scalebox-update"
-    chmod +x "/usr/local/bin/scalebox-update"
+    cp "$temp_dir/scalebox-update" "/usr/local/bin/scalebox-update.new"
+    chmod +x "/usr/local/bin/scalebox-update.new"
+    mv "/usr/local/bin/scalebox-update.new" "/usr/local/bin/scalebox-update"
   fi
 
   # Only update service file if different
