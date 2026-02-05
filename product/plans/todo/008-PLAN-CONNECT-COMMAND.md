@@ -100,9 +100,9 @@ export function findVm(idOrName: string): VM | undefined {
   const byId = vms.get(idOrName);
   if (byId) return byId;
 
-  // Fall back to name search
+  // Fall back to name search (guard against undefined name)
   for (const vm of vms.values()) {
-    if (vm.name === idOrName) return vm;
+    if (vm.name && vm.name === idOrName) return vm;
   }
   return undefined;
 }
@@ -134,7 +134,22 @@ app.delete("/vms/:id", async (c) => {
 app.post("/vms/:id/snapshot", async (c) => {
   const vm = findVm(c.req.param("id"));
   if (!vm) return c.json({ error: "VM not found" }, 404);
-  // ... rest uses vm.id
+
+  try {
+    const body = await c.req.json();
+    const templateName = body.template_name;
+
+    if (!templateName) {
+      return c.json({ error: "template_name is required" }, 400);
+    }
+
+    const result = await snapshotVm(vm, templateName);
+    return c.json(result, 201);
+  } catch (e: unknown) {
+    console.error("Snapshot creation failed:", e);
+    const err = e as { status?: number; message?: string };
+    return c.json({ error: err.message || "Unknown error" }, err.status || 500);
+  }
 });
 ```
 
@@ -224,6 +239,14 @@ export async function startUdpProxy(
   targetIp: string,
   targetPort: number
 ): Promise<void> {
+  // Mosh requires the same port for client and server (--port flag sets both)
+  if (localPort !== targetPort) {
+    throw new Error(
+      `UDP proxy port mismatch: localPort=${localPort} but targetPort=${targetPort}. ` +
+      `Mosh requires identical ports.`
+    );
+  }
+
   const extIf = await getExternalInterface();
 
   // Add DNAT rule for incoming UDP (specify interface to avoid internal traffic)
@@ -232,7 +255,13 @@ export async function startUdpProxy(
   // Add MASQUERADE for return traffic
   await $`sudo iptables -t nat -A POSTROUTING -p udp -d ${targetIp} --dport ${targetPort} -j MASQUERADE`.quiet();
 
-  // Track the rule (including interface for consistent cleanup)
+  // Verify rules were actually created (iptables can fail silently with .quiet())
+  const rules = await $`sudo iptables-save -t nat`.text().catch(() => "");
+  if (!rules.includes(`--dport ${localPort}`) || !rules.includes(targetIp)) {
+    throw new Error(`Failed to create UDP proxy rules for port ${localPort}`);
+  }
+
+  // Track the rule only after verification
   activeRules.set(vmId, { localPort, targetIp, targetPort, extIf });
 
   log(`UDP proxy started: ${extIf}:${localPort} -> ${targetIp}:${targetPort}`);
@@ -464,11 +493,12 @@ ensure_ssh_key() {
 
   # Check if both files exist
   if [[ -f "$key_file" && -f "$pub_file" ]]; then
-    # Validate key format
+    # Fix permissions FIRST (ssh-keygen -l may fail if permissions are wrong)
+    chmod 600 "$key_file" 2>/dev/null || true
+    chmod 644 "$pub_file" 2>/dev/null || true
+
+    # Then validate key format
     if ssh-keygen -l -f "$key_file" &>/dev/null; then
-      # Fix permissions if wrong
-      chmod 600 "$key_file" 2>/dev/null || true
-      chmod 644 "$pub_file" 2>/dev/null || true
       return 0
     else
       echo "Warning: Existing SSH key is invalid, regenerating..." >&2
@@ -588,7 +618,17 @@ Add helper to extract host from URL:
 ```bash
 # Extract hostname from SCALEBOX_HOST URL
 get_ssh_host() {
-  echo "$SCALEBOX_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||; s|/.*$||'
+  # Extract hostname from URL, handling:
+  # - Protocol: https://host -> host
+  # - Auth: user:pass@host -> host
+  # - Port: host:8080 -> host
+  # - Path: host/path -> host
+  local host="$SCALEBOX_HOST"
+  host="${host#*://}"      # Remove protocol
+  host="${host##*@}"       # Remove userinfo (user:pass@)
+  host="${host%%:*}"       # Remove port (keep first part before :)
+  host="${host%%/*}"       # Remove path
+  echo "$host"
 }
 ```
 
@@ -637,8 +677,10 @@ cmd_connect() {
   local ssh_host
   ssh_host=$(get_ssh_host)
 
-  # Common SSH options: auto-accept new host keys (VMs are ephemeral)
-  local base_ssh_opts="-o StrictHostKeyChecking=accept-new"
+  # Common SSH options for ephemeral VMs:
+  # - StrictHostKeyChecking=accept-new: Accept new keys, warn on changes
+  # - UserKnownHostsFile=/dev/null: Don't pollute known_hosts with ephemeral VM keys
+  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
 
   if [[ "$use_ssh" == "true" ]]; then
     # Direct SSH connection (fallback if mosh doesn't work)
@@ -659,9 +701,11 @@ cmd_connect() {
 
     # Build SSH command for mosh
     # Use printf %q to safely quote paths with spaces for shell expansion inside mosh --ssh
+    # Note: base_ssh_opts is safe to expand directly (no special chars, known values)
     local quoted_identity
     quoted_identity=$(printf '%q' "$identity")
-    local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity} ${base_ssh_opts}"
+    local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity}"
+    ssh_cmd+=" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
     for opt in "${ssh_opts[@]}"; do
       ssh_cmd+=" $(printf '%q' "$opt")"
     done
@@ -699,9 +743,11 @@ cmd_version() {
 
 ### Host Key Handling
 
-VMs are ephemeral, so strict host key checking is relaxed:
+VMs are ephemeral, so host key checking is adjusted:
 - `StrictHostKeyChecking=accept-new` - Accept new keys, warn on changes
-- First connection shows: `Warning: Permanently added '[host]:22001' (ED25519) to known hosts.`
+- `UserKnownHostsFile=/dev/null` - Don't store ephemeral VM keys in known_hosts
+
+This prevents conflicts when a new VM gets the same port as a previously deleted VM.
 
 ### Verification
 
@@ -1042,7 +1088,7 @@ Consider adding `./do test-root` or skipping UDP tests in CI if root unavailable
 - [ ] `sb connect vm -i keyfile` uses explicit key
 - [ ] `sb connect vm --ssh` forces SSH instead of mosh
 - [ ] Falls back to SSH if mosh not installed (with message)
-- [ ] Host key prompt handled with `StrictHostKeyChecking=accept-new`
+- [ ] Host keys not stored (UserKnownHostsFile=/dev/null)
 
 ### Phase 5: Template
 - [ ] `mosh-server` pre-installed in debian-base template
@@ -1148,7 +1194,9 @@ Rules are added/removed per-VM. Mitigations:
 ### Host Key Verification
 
 - Uses `StrictHostKeyChecking=accept-new` (accept new, warn on change)
+- Uses `UserKnownHostsFile=/dev/null` (don't persist ephemeral VM keys)
 - Appropriate for ephemeral VMs where host keys change frequently
+- Prevents "REMOTE HOST IDENTIFICATION HAS CHANGED" errors when ports are reused
 - Users connecting to long-lived VMs should use standard SSH with strict checking
 
 ### IPv6
