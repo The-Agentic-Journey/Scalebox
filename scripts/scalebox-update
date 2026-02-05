@@ -197,6 +197,12 @@ EOF
 # VM routes will be generated on scaleboxd startup
 EOF
 
+  # Reload Caddy to pick up the new config immediately
+  log "Reloading Caddy..."
+  if ! systemctl reload caddy 2>/dev/null; then
+    log "Warning: Caddy reload failed - scaleboxd will retry on startup"
+  fi
+
   log "Caddyfile migration complete"
 }
 
