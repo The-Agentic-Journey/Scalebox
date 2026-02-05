@@ -34,6 +34,18 @@ import {
 // In-memory VM state
 export const vms = new Map<string, VM>();
 
+export function findVm(idOrName: string): VM | undefined {
+	// First try direct ID lookup (fast path)
+	const byId = vms.get(idOrName);
+	if (byId) return byId;
+
+	// Fall back to name search (guard against undefined name)
+	for (const vm of vms.values()) {
+		if (vm.name && vm.name === idOrName) return vm;
+	}
+	return undefined;
+}
+
 // Mutex for VM creation
 let creationLock: Promise<void> = Promise.resolve();
 

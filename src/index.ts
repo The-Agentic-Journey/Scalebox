@@ -6,6 +6,7 @@ import { deleteTemplate, listTemplates } from "./services/template";
 import {
 	createVm,
 	deleteVm,
+	findVm,
 	snapshotVm,
 	vmToResponse,
 	vms,
@@ -62,7 +63,7 @@ app.get("/vms", (c) => {
 });
 
 app.get("/vms/:id", (c) => {
-	const vm = vms.get(c.req.param("id"));
+	const vm = findVm(c.req.param("id"));
 	if (!vm) return c.json({ error: "VM not found" }, 404);
 	return c.json(vmToResponse(vm));
 });
@@ -94,7 +95,7 @@ app.post("/vms", async (c) => {
 });
 
 app.delete("/vms/:id", async (c) => {
-	const vm = vms.get(c.req.param("id"));
+	const vm = findVm(c.req.param("id"));
 	if (!vm) return c.json({ error: "VM not found" }, 404);
 	await deleteVm(vm);
 	await updateCaddyConfig();
@@ -102,7 +103,7 @@ app.delete("/vms/:id", async (c) => {
 });
 
 app.post("/vms/:id/snapshot", async (c) => {
-	const vm = vms.get(c.req.param("id"));
+	const vm = findVm(c.req.param("id"));
 	if (!vm) return c.json({ error: "VM not found" }, 404);
 
 	try {
