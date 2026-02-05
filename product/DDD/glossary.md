@@ -157,6 +157,10 @@ A server-side administration tool (installed at `/usr/local/bin/scalebox-update`
 **Note:** This is different from `sb CLI`, which is a user-facing tool for interacting with the Scalebox API.
 
 ### sb CLI
-The user-facing command-line tool for interacting with the Scalebox API. Named `sb` for brevity. A `scalebox` symlink is maintained for backward compatibility.
+The user-facing command-line tool for interacting with the Scalebox API. Named `sb` for brevity.
+
+**Installation:** Installed on user machines (macOS, Linux), not on the Scalebox server. Communicates with the server over HTTPS.
+
+**Configuration:** Reads `SCALEBOX_URL` and `SCALEBOX_TOKEN` from environment variables or `~/.config/scalebox/config`.
 
 **Note:** This is different from `scalebox-update`, which is a server-side administration tool.

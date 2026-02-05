@@ -6,12 +6,12 @@
 # Does NOT require root. Does NOT install the server.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/anthropics/scalebox/main/scripts/install-sb.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/install-sb.sh | bash
 #
 set -euo pipefail
 
 INSTALL_DIR="${SCALEBOX_INSTALL_DIR:-$HOME/.local/bin}"
-REPO="anthropics/scalebox"
+REPO="The-Agentic-Journey/Scalebox"
 RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
 
 log() { echo "[scalebox] $1"; }

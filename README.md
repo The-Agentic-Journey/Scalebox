@@ -14,6 +14,23 @@ The installer prompts for configuration and handles everything: Firecracker, net
 
 **Requirements:** Debian/Ubuntu with KVM support.
 
+## CLI Installation (for clients)
+
+Install the `sb` CLI on your Mac or Linux machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/install-sb.sh | bash
+```
+
+Then configure it:
+
+```bash
+sb login https://your-server.example.com
+# Paste your API token when prompted
+```
+
+The CLI installs to `~/.local/bin` and requires no root access.
+
 ## Quick Start
 
 ```bash

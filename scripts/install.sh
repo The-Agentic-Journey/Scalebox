@@ -385,17 +385,6 @@ install_binary() {
   fi
 }
 
-# === Install CLI ===
-install_cli() {
-  if [[ -f "$INSTALL_DIR/sb" ]]; then
-    log "Installing sb CLI..."
-    cp "$INSTALL_DIR/sb" /usr/local/bin/sb
-    chmod +x /usr/local/bin/sb
-    # Backward compatibility symlink
-    ln -sf /usr/local/bin/sb /usr/local/bin/scalebox
-  fi
-}
-
 # === Install Update Script ===
 install_update_script() {
   if [[ -f "$INSTALL_DIR/scalebox-update" ]]; then
@@ -467,7 +456,6 @@ preflight_check() {
 
   [[ -f "$INSTALL_DIR/scaleboxd" ]] || missing+=("scaleboxd binary")
   [[ -f "$INSTALL_DIR/scaleboxd.service" ]] || missing+=("scaleboxd.service")
-  [[ -f "$INSTALL_DIR/sb" ]] || missing+=("sb CLI")
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     die "Missing required files in $INSTALL_DIR: ${missing[*]}"
@@ -493,7 +481,6 @@ main() {
   setup_network
   create_rootfs
   install_binary
-  install_cli
   install_update_script
   install_service
   start_service
@@ -513,10 +500,12 @@ main() {
       echo "  VM URLs: https://{vm-name}.$VM_DOMAIN"
   fi
   echo ""
-  echo "  Commands:"
+  echo "  Server commands:"
   echo "    systemctl status scaleboxd"
   echo "    journalctl -u scaleboxd -f"
-  echo "    sb vm list"
+  echo ""
+  echo "  Install CLI on your machine:"
+  echo "    curl -fsSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/install-sb.sh | bash"
   echo ""
   echo "  Save your API token - it won't be shown again!"
   echo ""

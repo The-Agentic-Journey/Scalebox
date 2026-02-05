@@ -4,6 +4,30 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 
 ---
 
+## External Clients
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                             EXTERNAL CLIENTS                                     │
+│                                                                                  │
+│   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐            │
+│   │    sb CLI       │    │   curl / HTTP   │    │   AI Agents     │            │
+│   │  (user machines)│    │    clients      │    │                 │            │
+│   └────────┬────────┘    └────────┬────────┘    └────────┬────────┘            │
+│            │                      │                      │                      │
+│            └──────────────────────┼──────────────────────┘                      │
+│                                   │                                              │
+│                            HTTPS (REST API)                                      │
+│                                   │                                              │
+└───────────────────────────────────┼─────────────────────────────────────────────┘
+                                    │
+                                    ▼
+```
+
+The sb CLI and other HTTP clients are **external** to the Scalebox server. They interact exclusively through the REST API over HTTPS. The CLI has no special access—it uses the same endpoints available to any authenticated client.
+
+---
+
 ## Context Overview
 
 ```
@@ -198,3 +222,33 @@ No message queues, event buses, or async communication patterns are currently us
 | `src/types.ts` | Shared Kernel |
 | `src/config.ts` | Shared Kernel |
 | `src/index.ts` | Application Layer |
+
+---
+
+## Deployment Topology
+
+Scalebox has a clear separation between server-side and client-side components:
+
+### Server-Side (installed on Scalebox host)
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `scaleboxd` | `/usr/local/bin/scaleboxd` | API server daemon |
+| `scalebox-update` | `/usr/local/bin/scalebox-update` | Server update tool |
+| Firecracker | `/usr/local/bin/firecracker` | VM hypervisor |
+| Caddy | System package | HTTPS reverse proxy |
+
+### Client-Side (installed on user machines)
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `sb` | User's PATH | CLI for API interaction |
+
+### Key Principle
+
+The `sb` CLI is **not** installed on the server. It is distributed separately and installed on user machines (developer laptops, CI systems, etc.). This separation:
+
+1. Keeps the server minimal and secure
+2. Allows CLI updates independent of server updates
+3. Makes the CLI portable across macOS, Linux, and Windows
+4. Ensures the CLI has no privileged access—it uses the same REST API as any other client
