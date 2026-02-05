@@ -377,6 +377,32 @@ wait_for_https() {
     sleep 2
     ((attempt++)) || true
   done
+
+  # Certificate wait failed - capture debug info
+  echo ""
+  echo "=== HTTPS Certificate Debug Info ==="
+  echo ""
+  echo "--- DNS Resolution ---"
+  host "$API_DOMAIN" 2>&1 || echo "(host command failed)"
+  echo ""
+  echo "--- Curl Error ---"
+  curl -v "https://$API_DOMAIN/health" 2>&1 | head -50 || true
+  echo ""
+  echo "--- Caddy Service Status ---"
+  systemctl status caddy --no-pager 2>&1 | head -20 || true
+  echo ""
+  echo "--- Caddy Logs (last 30 lines) ---"
+  journalctl -u caddy -n 30 --no-pager 2>&1 || true
+  echo ""
+  echo "--- Caddyfile ---"
+  cat /etc/caddy/Caddyfile 2>&1 || true
+  echo ""
+  echo "--- scaleboxd Health Check (localhost) ---"
+  curl -sf http://localhost:8080/health 2>&1 || echo "(scaleboxd not responding)"
+  echo ""
+  echo "=== End Debug Info ==="
+  echo ""
+
   die "Failed to obtain TLS certificate for $API_DOMAIN"
 }
 

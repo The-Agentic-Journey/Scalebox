@@ -520,7 +520,46 @@ do_check_update() {
 
   # Bootstrap with LAST RELEASE (the old version)
   echo "==> Running bootstrap with LAST RELEASE..."
-  provision_vm_bootstrap "$old_release_url"
+  if ! provision_vm_bootstrap "$old_release_url"; then
+    echo "==> Bootstrap with LAST RELEASE FAILED. Capturing debug info..."
+
+    echo "==> Caddy logs:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -u caddy -n 50 --no-pager" \
+      --quiet || true
+
+    echo "==> scaleboxd logs:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="journalctl -u scaleboxd -n 50 --no-pager" \
+      --quiet || true
+
+    echo "==> Caddyfile:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="cat /etc/caddy/Caddyfile" \
+      --quiet || true
+
+    echo "==> DNS resolution from VM:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="host $VM_FQDN" \
+      --quiet || true
+
+    echo "==> Curl verbose to API domain:"
+    gcloud compute ssh "$VM_NAME" \
+      --zone="$GCLOUD_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --command="curl -v https://$VM_FQDN/health 2>&1 | head -50" \
+      --quiet || true
+
+    exit 1
+  fi
 
   echo "==> Verifying initial install..."
   gcloud compute ssh "$VM_NAME" \
