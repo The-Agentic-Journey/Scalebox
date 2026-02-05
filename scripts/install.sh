@@ -16,6 +16,7 @@ API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
 API_DOMAIN="${API_DOMAIN:-}"
 VM_DOMAIN="${VM_DOMAIN:-}"
+ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
@@ -304,14 +305,25 @@ install_caddy() {
   apt-get update -qq
   apt-get install -y -qq caddy
 
-  # Start Caddyfile
-  cat > /etc/caddy/Caddyfile <<'CADDYEOF'
+  # Start Caddyfile with global options
+  if [[ "$ACME_STAGING" == "true" ]]; then
+    cat > /etc/caddy/Caddyfile <<'CADDYEOF'
+{
+    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+    on_demand_tls {
+        ask http://localhost:8080/caddy/check
+    }
+}
+CADDYEOF
+  else
+    cat > /etc/caddy/Caddyfile <<'CADDYEOF'
 {
     on_demand_tls {
         ask http://localhost:8080/caddy/check
     }
 }
 CADDYEOF
+  fi
 
   # Add main API domain if set
   if [[ -n "$API_DOMAIN" ]]; then
@@ -352,8 +364,14 @@ wait_for_https() {
   log "Waiting for HTTPS certificate..."
   local max_retries=60
   local attempt=1
+  local curl_opts
+  if [[ "$ACME_STAGING" == "true" ]]; then
+    curl_opts="-sfk"
+  else
+    curl_opts="-sf"
+  fi
   while [[ $attempt -le $max_retries ]]; do
-    if curl -sf "https://$API_DOMAIN/health" &>/dev/null; then
+    if curl $curl_opts "https://$API_DOMAIN/health" &>/dev/null; then
       log "HTTPS is ready"
       return 0
     fi
@@ -416,6 +434,7 @@ API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
 VM_DOMAIN=$VM_DOMAIN
+ACME_STAGING=$ACME_STAGING
 EOF
   )
 
