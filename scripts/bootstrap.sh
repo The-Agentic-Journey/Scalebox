@@ -55,16 +55,17 @@ check_deps() {
 }
 
 # Prompt for input with default value
+# Note: reads from /dev/tty to work when script is piped (curl | bash)
 prompt() {
   local prompt_text=$1
   local default=${2:-}
   local value=""
 
   if [[ -n "$default" ]]; then
-    read -r -p "$prompt_text [$default]: " value
+    read -r -p "$prompt_text [$default]: " value < /dev/tty
     value="${value:-$default}"
   else
-    read -r -p "$prompt_text: " value
+    read -r -p "$prompt_text: " value < /dev/tty
   fi
 
   echo "$value"
