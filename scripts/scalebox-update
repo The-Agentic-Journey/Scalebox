@@ -149,6 +149,23 @@ migrate_caddy_config() {
     api_domain=$(grep -E "^API_DOMAIN=" /etc/scaleboxd/config | cut -d= -f2-)
   fi
 
+  # If API_DOMAIN not in config, try to extract from existing Caddyfile
+  # Look for a non-wildcard domain block with reverse_proxy localhost:8080
+  if [[ -z "$api_domain" && -f "$caddyfile" ]]; then
+    # Find domain that proxies to localhost:8080 (the API)
+    # Pattern: "domain.com {" followed eventually by "reverse_proxy localhost:8080"
+    api_domain=$(awk '
+      /^[a-zA-Z0-9].*\{/ { domain = $1 }
+      /reverse_proxy localhost:8080/ && domain { print domain; exit }
+    ' "$caddyfile")
+
+    if [[ -n "$api_domain" ]]; then
+      log "Recovered API_DOMAIN from Caddyfile: $api_domain"
+      # Save to config for future updates
+      echo "API_DOMAIN=$api_domain" >> /etc/scaleboxd/config
+    fi
+  fi
+
   # Check if ACME staging is enabled
   local acme_staging=""
   if [[ -f /etc/scaleboxd/config ]]; then
