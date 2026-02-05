@@ -1085,6 +1085,20 @@ Consider adding `./do test-root` or skipping UDP tests in CI if root unavailable
 
 ---
 
+## Implementation Verification
+
+**IMPORTANT**: After implementing each phase, run:
+
+```bash
+./do check
+```
+
+This performs the full CI pipeline: lint, deploy to test VM, and run integration tests. Do not proceed to the next phase until `./do check` passes.
+
+For phases that add new functionality, also add corresponding tests to `test/integration.test.ts` before running `./do check`.
+
+---
+
 ## Verification Checklist
 
 ### Phase 0: API Lookup by Name
