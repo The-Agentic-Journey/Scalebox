@@ -123,5 +123,10 @@ app.post("/vms/:id/snapshot", async (c) => {
 });
 
 const host = "0.0.0.0";
-console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
+
+// Initialize Caddy config on startup to ensure vms.caddy matches current VM state
+updateCaddyConfig().then(() => {
+	console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
+});
+
 export default { port: config.apiPort, hostname: host, fetch: app.fetch };

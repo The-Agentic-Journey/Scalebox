@@ -22,8 +22,19 @@ export async function updateCaddyConfig(): Promise<void> {
 	}
 
 	// Atomic write: write to .tmp then rename
-	await writeFile(VMSFILE_TMP, content);
-	await rename(VMSFILE_TMP, VMSFILE);
+	try {
+		await writeFile(VMSFILE_TMP, content);
+		await rename(VMSFILE_TMP, VMSFILE);
+	} catch (error) {
+		// Directory may not exist if Caddy is not installed yet
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			console.log(
+				"Skipping Caddy config update: /etc/caddy/ directory does not exist (Caddy may not be installed yet)",
+			);
+			return;
+		}
+		throw error;
+	}
 
 	// Reload Caddy
 	try {
