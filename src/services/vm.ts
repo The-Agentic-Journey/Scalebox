@@ -30,6 +30,7 @@ import {
 	injectSshKey,
 	resizeRootfs,
 } from "./storage";
+import { startUdpProxy, stopUdpProxy } from "./udpProxy";
 
 // In-memory VM state
 export const vms = new Map<string, VM>();
@@ -131,6 +132,9 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 			throw proxyError;
 		}
 
+		// Start UDP proxy for mosh (use same host port, forward to same port on VM)
+		await startUdpProxy(vmId, port, ip, port);
+
 		// Create VM record
 		const vm: VM = {
 			id: vmId,
@@ -155,6 +159,17 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		// Cleanup on failure
 		releaseIp(ip);
 		releasePort(port);
+
+		// Clean up TCP proxy if it was started
+		try {
+			stopProxy(vmId);
+		} catch {}
+
+		// Clean up UDP proxy if it was started
+		try {
+			await stopUdpProxy(vmId);
+		} catch {}
+
 		try {
 			await deleteTapDevice(tapDevice);
 		} catch {}
@@ -168,6 +183,9 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 }
 
 export async function deleteVm(vm: VM): Promise<void> {
+	// Stop UDP proxy for mosh
+	await stopUdpProxy(vm.id);
+
 	// Stop proxy
 	stopProxy(vm.id);
 

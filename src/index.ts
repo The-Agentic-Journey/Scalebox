@@ -3,6 +3,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
 import { deleteTemplate, listTemplates } from "./services/template";
+import { cleanupOrphanedUdpRules } from "./services/udpProxy";
 import {
 	createVm,
 	deleteVm,
@@ -124,6 +125,9 @@ app.post("/vms/:id/snapshot", async (c) => {
 });
 
 const host = "0.0.0.0";
+
+// Clean up orphaned UDP proxy rules from previous runs
+await cleanupOrphanedUdpRules();
 
 // Initialize Caddy config on startup to ensure vms.caddy matches current VM state
 updateCaddyConfig().then(() => {
