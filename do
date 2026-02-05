@@ -590,7 +590,7 @@ do_check_update() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="curl -sfk https://localhost/health"
+    --command="curl -sf http://localhost:8080/health"
 
   # Run full test suite against updated system
   echo "==> Getting API token..."
