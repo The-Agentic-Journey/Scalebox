@@ -10,6 +10,9 @@ export const config = {
 	defaultDiskSizeGib: Number(process.env.DEFAULT_DISK_SIZE_GIB) || 2,
 	maxDiskSizeGib: Number(process.env.MAX_DISK_SIZE_GIB) || 100,
 	protectedTemplates: ["debian-base"],
+	// Domain for API HTTPS access (e.g., "api.example.com")
+	// When set, the API is accessible at https://{apiDomain}
+	apiDomain: process.env.API_DOMAIN || "",
 	// Domain for VM HTTPS access (e.g., "vms.example.com")
 	// When set, VMs are accessible at https://{vm-name}.{vmDomain}
 	vmDomain: process.env.VM_DOMAIN || "",
