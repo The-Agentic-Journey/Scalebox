@@ -305,6 +305,12 @@ install_caddy() {
   apt-get update -qq
   apt-get install -y -qq caddy
 
+  # Create vms.caddy stub file (managed by scaleboxd at runtime)
+  cat > /etc/caddy/vms.caddy <<'VMSCADDYEOF'
+# Managed by scaleboxd - do not edit manually
+# VM routes will be generated on scaleboxd startup
+VMSCADDYEOF
+
   # Start Caddyfile with global options
   if [[ "$ACME_STAGING" == "true" ]]; then
     cat > /etc/caddy/Caddyfile <<'CADDYEOF'
@@ -336,22 +342,11 @@ $API_DOMAIN {
 EOF
   fi
 
-  # Add wildcard for VM subdomains if VM_DOMAIN is set
-  if [[ -n "$VM_DOMAIN" ]]; then
-      log "Configuring Caddy for VM subdomains on $VM_DOMAIN..."
-      cat >> /etc/caddy/Caddyfile <<EOF
+  # Add import for VM routes (managed by scaleboxd)
+  cat >> /etc/caddy/Caddyfile <<'CADDYEOF'
 
-*.$VM_DOMAIN {
-    tls {
-        on_demand
-    }
-
-    handle {
-        respond "VM not found" 404
-    }
-}
-EOF
-  fi
+import /etc/caddy/vms.caddy
+CADDYEOF
 
   systemctl enable caddy
   systemctl restart caddy
