@@ -132,6 +132,74 @@ cleanup() {
   rm -f "${SCALEBOXD_BIN}.prev" 2>/dev/null || true
 }
 
+migrate_caddy_config() {
+  local caddyfile="/etc/caddy/Caddyfile"
+  local vmsfile="/etc/caddy/vms.caddy"
+
+  # Skip if already migrated (import statement exists)
+  if grep -q "import /etc/caddy/vms.caddy" "$caddyfile" 2>/dev/null; then
+    return 0
+  fi
+
+  log "Migrating Caddyfile to split format..."
+
+  # Extract API_DOMAIN from scaleboxd config (if set)
+  local api_domain=""
+  if [[ -f /etc/scaleboxd/config ]]; then
+    api_domain=$(grep -E "^API_DOMAIN=" /etc/scaleboxd/config | cut -d= -f2-)
+  fi
+
+  # Check if ACME staging is enabled
+  local acme_staging=""
+  if [[ -f /etc/scaleboxd/config ]]; then
+    acme_staging=$(grep -E "^ACME_STAGING=" /etc/scaleboxd/config | cut -d= -f2-)
+  fi
+
+  # Write new static Caddyfile
+  if [[ "$acme_staging" == "true" ]]; then
+    cat > "$caddyfile" << 'EOF'
+{
+    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+    on_demand_tls {
+        ask http://localhost:8080/caddy/check
+    }
+}
+EOF
+  else
+    cat > "$caddyfile" << 'EOF'
+{
+    on_demand_tls {
+        ask http://localhost:8080/caddy/check
+    }
+}
+EOF
+  fi
+
+  # Add API domain block if configured
+  if [[ -n "$api_domain" ]]; then
+    cat >> "$caddyfile" << EOF
+
+$api_domain {
+    reverse_proxy localhost:8080
+}
+EOF
+  fi
+
+  # Add import statement
+  cat >> "$caddyfile" << 'EOF'
+
+import /etc/caddy/vms.caddy
+EOF
+
+  # Create stub vms.caddy (scaleboxd will populate on startup)
+  cat > "$vmsfile" << 'EOF'
+# Managed by scaleboxd - do not edit manually
+# VM routes will be generated on scaleboxd startup
+EOF
+
+  log "Caddyfile migration complete"
+}
+
 main() {
   log "Starting Scalebox update..."
 
@@ -153,6 +221,7 @@ main() {
   backup_current
   stop_service
   install_new "$temp_dir"
+  migrate_caddy_config
   start_service
 
   if health_check; then
