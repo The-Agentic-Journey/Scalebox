@@ -1,18 +1,51 @@
 import { exec as execCallback } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { config } from "../config";
 import { vms } from "./vm";
 
 const exec = promisify(execCallback);
 
+const VMSFILE = "/etc/caddy/vms.caddy";
+const VMSFILE_TMP = "/etc/caddy/vms.caddy.tmp";
+
 export async function updateCaddyConfig(): Promise<void> {
-	// Skip if vmDomain is not configured
-	if (!config.vmDomain) {
-		return;
+	// Build content
+	const content = buildVmsCaddyContent();
+
+	// Read current content for potential rollback
+	let previousContent: string | null = null;
+	try {
+		previousContent = await readFile(VMSFILE, "utf-8");
+	} catch {
+		// File doesn't exist yet, no rollback needed
 	}
 
-	// Build Caddyfile content
+	// Atomic write: write to .tmp then rename
+	await writeFile(VMSFILE_TMP, content);
+	await rename(VMSFILE_TMP, VMSFILE);
+
+	// Reload Caddy
+	try {
+		await exec("systemctl reload caddy");
+	} catch (error) {
+		// Rollback on failure
+		if (previousContent !== null) {
+			await writeFile(VMSFILE, previousContent);
+		}
+		console.error("Caddy reload failed, rolled back vms.caddy:", error);
+		// Don't throw - VM operation should still succeed
+	}
+}
+
+function buildVmsCaddyContent(): string {
+	if (!config.vmDomain) {
+		return `# Managed by scaleboxd - do not edit manually
+# VM routes are added here when VM_DOMAIN is configured
+`;
+	}
+
+	// Build VM-specific routes
 	const vmRoutes = Array.from(vms.values())
 		.map((vm) => {
 			return `	@${vm.name} host ${vm.name}.${config.vmDomain}
@@ -22,16 +55,7 @@ export async function updateCaddyConfig(): Promise<void> {
 		})
 		.join("\n\n");
 
-	const acmeCaLine = config.acmeStaging
-		? "\n\tacme_ca https://acme-staging-v02.api.letsencrypt.org/directory"
-		: "";
-
-	const caddyfile = `{${acmeCaLine}
-	on_demand_tls {
-		ask http://localhost:${config.apiPort}/caddy/check
-	}
-}
-
+	return `# Managed by scaleboxd - do not edit manually
 *.${config.vmDomain} {
 	tls {
 		on_demand
@@ -44,10 +68,4 @@ ${vmRoutes}
 	}
 }
 `;
-
-	// Write Caddyfile
-	await writeFile("/etc/caddy/Caddyfile", caddyfile);
-
-	// Reload Caddy
-	await exec("systemctl reload caddy");
 }
