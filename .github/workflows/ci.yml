@@ -56,19 +56,44 @@ jobs:
           name: builds
           path: builds/
 
-  # TODO: Re-enable check-update after this release (build-50+)
-  # Skipped because build-49 doesn't support ACME_STAGING, causing Let's Encrypt
-  # rate limits. Once this release is published, future check-update runs will
-  # use a release with ACME_STAGING support.
   check-update:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 30
+
     steps:
-      - name: Skip (re-enable after build-50)
-        run: echo "Skipped - old release lacks ACME_STAGING support"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cache bun
+        uses: actions/cache@v4
+        with:
+          path: .bun
+          key: bun-${{ runner.os }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run upgrade test
+        run: ./do check-update
 
   release:
-    needs: [check]
+    needs: [check, check-update]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
