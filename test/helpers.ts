@@ -94,8 +94,9 @@ function getSbPath(): string {
 export async function initCli(): Promise<void> {
 	cliConfigDir = await mkdtemp(join(tmpdir(), "scalebox-test-"));
 	const host = `${API_BASE_URL}`;
-	const result =
-		await $`echo ${API_TOKEN} | SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} login --host ${host} --token-stdin`.quiet();
+	const result = await $`echo ${API_TOKEN} | ${getSbPath()} login --host ${host} --token-stdin`
+		.env({ SCALEBOX_INSECURE: "1", SCALEBOX_CONFIG_DIR: cliConfigDir })
+		.quiet();
 	if (result.exitCode !== 0) {
 		throw new Error(`sb login failed: ${result.stderr.toString()}`);
 	}
@@ -116,8 +117,10 @@ export async function sbCmd(
 	if (!cliConfigDir) {
 		throw new Error("CLI not initialized. Call initCli() first.");
 	}
+	const configDir = cliConfigDir; // Local variable for type narrowing
 
-	const result = await $`SCALEBOX_CONFIG_DIR=${cliConfigDir} ${getSbPath()} --json ${args}`
+	const result = await $`${getSbPath()} --json ${args}`
+		.env({ SCALEBOX_INSECURE: "1", SCALEBOX_CONFIG_DIR: configDir })
 		.quiet()
 		.nothrow();
 

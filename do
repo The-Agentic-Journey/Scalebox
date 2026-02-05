@@ -155,7 +155,7 @@ provision_vm_bootstrap() {
 set timeout 900
 log_user 1
 
-spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' bash /tmp/bootstrap.sh"
+spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true bash /tmp/bootstrap.sh"
 
 expect {
     "Enter API domain (or press Enter to skip HTTPS): " {
@@ -455,7 +455,7 @@ do_check() {
   [[ -n "$token" ]] || die "Failed to get API token"
 
   echo "==> Running tests against https://$VM_FQDN..."
-  if ! VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
+  if ! NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
     echo "==> Tests FAILED. Capturing debug info..."
 
     echo "==> scaleboxd logs after test failure:"
@@ -551,7 +551,7 @@ do_check_update() {
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
     --project="$GCLOUD_PROJECT" \
-    --command="curl -sf http://localhost:8080/health"
+    --command="curl -sfk https://localhost/health"
 
   # Run full test suite against updated system
   echo "==> Getting API token..."
@@ -559,7 +559,7 @@ do_check_update() {
   token=$(get_api_token)
 
   echo "==> Running integration tests against updated system..."
-  VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
+  NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
 
   echo "==> check-update: PASSED (last release → current build)"
 }

@@ -39,10 +39,12 @@ need_config() {
 api() {
   local method=$1 path=$2; shift 2
   local response http_code
+  local insecure_flag=""
+  [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
 
   # Capture both response body and HTTP status code
   # Note: Don't use -f flag as it prevents capturing error response bodies
-  response=$(curl -s -w "\n%{http_code}" -X "$method" \
+  response=$(curl $insecure_flag -s -w "\n%{http_code}" -X "$method" \
     -H "Authorization: Bearer $SCALEBOX_TOKEN" \
     -H "Content-Type: application/json" \
     "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null)
@@ -154,7 +156,9 @@ cmd_login() {
 
   # Test connection
   echo "Testing connection..."
-  if ! curl -sf -H "Authorization: Bearer $token" "$host/health" >/dev/null 2>&1; then
+  local insecure_flag=""
+  [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
+  if ! curl $insecure_flag -sf -H "Authorization: Bearer $token" "$host/health" >/dev/null 2>&1; then
     die "Failed to connect to $host. Check the URL and token."
   fi
 
@@ -220,7 +224,9 @@ cmd_config_show() {
 
 cmd_status() {
   local response
-  if response=$(curl -sf "${SCALEBOX_HOST:-http://localhost:8080}/health" 2>/dev/null); then
+  local insecure_flag=""
+  [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
+  if response=$(curl $insecure_flag -sf "${SCALEBOX_HOST:-http://localhost:8080}/health" 2>/dev/null); then
     if [[ "$JSON_OUTPUT" == "true" ]]; then
       echo "$response" | jq -c '. + {status: 200}'
     else
@@ -431,6 +437,7 @@ Environment Variables:
   SCALEBOX_TOKEN       API token (overrides config file)
   SCALEBOX_CONFIG_DIR  Config directory (default: ~/.config/scalebox)
   SCALEBOX_JSON=true   Always output JSON
+  SCALEBOX_INSECURE=1  Skip TLS verification (for testing with staging certs)
 
 Examples:
   sb login
