@@ -249,22 +249,33 @@ export async function startUdpProxy(
 
   const extIf = await getExternalInterface();
 
-  // Add DNAT rule for incoming UDP (specify interface to avoid internal traffic)
-  await $`sudo iptables -t nat -A PREROUTING -i ${extIf} -p udp --dport ${localPort} -j DNAT --to-destination ${targetIp}:${targetPort}`.quiet();
-
-  // Add MASQUERADE for return traffic
-  await $`sudo iptables -t nat -A POSTROUTING -p udp -d ${targetIp} --dport ${targetPort} -j MASQUERADE`.quiet();
-
-  // Verify rules were actually created (iptables can fail silently with .quiet())
-  const rules = await $`sudo iptables-save -t nat`.text().catch(() => "");
-  if (!rules.includes(`--dport ${localPort}`) || !rules.includes(targetIp)) {
-    throw new Error(`Failed to create UDP proxy rules for port ${localPort}`);
-  }
-
-  // Track the rule only after verification
+  // Track the rule BEFORE adding iptables rules so cleanup works if verification fails
+  // (iptables commands may succeed but verification may fail)
   activeRules.set(vmId, { localPort, targetIp, targetPort, extIf });
 
-  log(`UDP proxy started: ${extIf}:${localPort} -> ${targetIp}:${targetPort}`);
+  try {
+    // Add DNAT rule for incoming UDP (specify interface to avoid internal traffic)
+    await $`sudo iptables -t nat -A PREROUTING -i ${extIf} -p udp --dport ${localPort} -j DNAT --to-destination ${targetIp}:${targetPort}`.quiet();
+
+    // Add MASQUERADE for return traffic
+    await $`sudo iptables -t nat -A POSTROUTING -p udp -d ${targetIp} --dport ${targetPort} -j MASQUERADE`.quiet();
+
+    // Verify rules were actually created (iptables can fail silently with .quiet())
+    const rules = await $`sudo iptables-save -t nat`.text().catch(() => "");
+    const expectedDnat = `--to-destination ${targetIp}:${targetPort}`;
+    const expectedMasq = `-d ${targetIp}`;
+    if (!rules.includes(expectedDnat) || !rules.includes(expectedMasq)) {
+      throw new Error(`Failed to create UDP proxy rules for ${targetIp}:${targetPort}`);
+    }
+
+    log(`UDP proxy started: ${extIf}:${localPort} -> ${targetIp}:${targetPort}`);
+  } catch (err) {
+    // Clean up tracking and any rules that may have been created
+    activeRules.delete(vmId);
+    await $`sudo iptables -t nat -D PREROUTING -i ${extIf} -p udp --dport ${localPort} -j DNAT --to-destination ${targetIp}:${targetPort}`.quiet().nothrow();
+    await $`sudo iptables -t nat -D POSTROUTING -p udp -d ${targetIp} --dport ${targetPort} -j MASQUERADE`.quiet().nothrow();
+    throw err;
+  }
 }
 
 export async function stopUdpProxy(vmId: string): Promise<void> {
@@ -301,7 +312,15 @@ export async function cleanupOrphanedUdpRules(): Promise<void> {
   const extIf = await getExternalInterface();
 
   // Use iptables-save format for reliable parsing
-  const rules = await $`sudo iptables-save -t nat`.text().catch(() => "");
+  const rules = await $`sudo iptables-save -t nat`.text().catch((err) => {
+    log(`WARNING: Failed to read iptables rules for cleanup: ${err.message || err}`);
+    return "";
+  });
+
+  if (!rules) {
+    log("Skipping orphan cleanup (no rules to process)");
+    return;
+  }
 
   for (const line of rules.split('\n')) {
     // Match PREROUTING DNAT rules targeting our VM subnet (172.16.x.x)
@@ -512,11 +531,15 @@ ensure_ssh_key() {
 
   # Generate new key
   echo "Generating SSH key for Scalebox..." >&2
-  mkdir -p "$SCALEBOX_CONFIG_DIR"
-  chmod 700 "$SCALEBOX_CONFIG_DIR"
-  ssh-keygen -t ed25519 -f "$key_file" -N "" -C "scalebox" >/dev/null 2>&1
-  chmod 600 "$key_file"
-  chmod 644 "$pub_file"
+  mkdir -p "$SCALEBOX_CONFIG_DIR" || die "Failed to create config directory"
+  chmod 700 "$SCALEBOX_CONFIG_DIR" || die "Failed to set config directory permissions"
+
+  if ! ssh-keygen -t ed25519 -f "$key_file" -N "" -C "scalebox" >/dev/null 2>&1; then
+    die "Failed to generate SSH key"
+  fi
+
+  chmod 600 "$key_file" || die "Failed to set private key permissions"
+  chmod 644 "$pub_file" || die "Failed to set public key permissions"
 }
 
 # Get public key content
@@ -772,16 +795,28 @@ sb connect my-vm -- -o ForwardAgent=yes
 
 ---
 
-## Phase 5: VM Template with Mosh
+## Phase 5: VM Template with Mosh (Essential)
 
 ### Goal
 Pre-install mosh-server in the base template so `sb connect` works immediately.
 
-### Modify: debian-base template
+**IMPORTANT**: This phase is essential for `sb connect` to work. Without mosh-server in the VM, the command will fail with "mosh-server: command not found". The `--ssh` fallback is available but defeats the purpose of this feature.
 
-When creating the base template, include mosh:
+**Current state**: Mosh is NOT in the base image. The debootstrap command in `scripts/install.sh` only includes: `openssh-server, iproute2, iputils-ping, haveged, netcat-openbsd`.
+
+### Modify: `scripts/install.sh`
+
+Update the debootstrap command to include mosh:
 
 ```bash
+debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh \
+  bookworm "$rootfs_dir" http://deb.debian.org/debian
+```
+
+Or add it in the rootfs configuration section:
+
+```bash
+# Inside chroot setup
 apt-get install -y mosh
 ```
 
