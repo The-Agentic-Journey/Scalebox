@@ -90,6 +90,14 @@ VMs boot from copy-on-write clones of templates. Creating a VM = clone template 
 
 Without domains, the API runs on `http://server:8080` and VMs are SSH-only.
 
+### TLS Options
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `ACME_STAGING` | Use Let's Encrypt staging environment | `false` |
+
+Set `ACME_STAGING=true` to use Let's Encrypt's staging servers for certificate issuance. This is useful for testing and CI environments since staging has no rate limits. **Note:** Staging certificates are not browser-trusted and will show security warnings.
+
 ### Config Files
 
 The installer creates these automatically:

@@ -89,6 +89,14 @@ A btrfs feature enabling instant, space-efficient file copies via copy-on-write.
 ### COW (Copy-on-Write)
 Storage optimization where copies share data until modified. Enables fast VM creation without duplicating entire disk images.
 
+### ACME Staging
+Let's Encrypt's staging environment for testing certificate issuance. Unlike the production ACME server, the staging environment has no rate limits, making it ideal for testing and development. Certificates issued by the staging environment are **not browser-trusted** (they are signed by a fake root CA), but they verify that the ACME flow works correctly.
+
+**Use cases:**
+- Testing Caddy configuration before going to production
+- CI/CD environments where real certificates aren't needed
+- Development setups to avoid hitting Let's Encrypt rate limits
+
 ---
 
 ## API Terms
