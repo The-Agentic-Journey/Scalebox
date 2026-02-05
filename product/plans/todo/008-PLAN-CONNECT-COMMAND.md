@@ -154,14 +154,16 @@ sb vm get "$id"     # By ID
 sb vm delete "$name"
 ```
 
-### Note
+### Notes
 
-This fix benefits ALL existing CLI commands that accept `<name|id>`:
+**Benefits all commands**: This fix benefits ALL existing CLI commands that accept `<name|id>`:
 - `sb vm get`
 - `sb vm delete`
 - `sb vm snapshot`
 - `sb vm wait`
 - `sb connect` (new)
+
+**Name uniqueness assumption**: `findVm()` returns the first VM matching the name. This is correct because the name generator already ensures uniqueness (see `src/services/nameGenerator.ts` which checks `isNameInUse()` before assigning). If somehow duplicate names existed, the behavior would be deterministic but arbitrary (returns whichever VM is iterated first).
 
 ---
 
@@ -195,6 +197,7 @@ interface UdpRule {
   localPort: number;
   targetIp: string;
   targetPort: number;
+  extIf: string;  // Store interface to ensure consistent cleanup
 }
 
 // Track active rules for cleanup and state management
@@ -229,8 +232,8 @@ export async function startUdpProxy(
   // Add MASQUERADE for return traffic
   await $`sudo iptables -t nat -A POSTROUTING -p udp -d ${targetIp} --dport ${targetPort} -j MASQUERADE`.quiet();
 
-  // Track the rule
-  activeRules.set(vmId, { localPort, targetIp, targetPort });
+  // Track the rule (including interface for consistent cleanup)
+  activeRules.set(vmId, { localPort, targetIp, targetPort, extIf });
 
   log(`UDP proxy started: ${extIf}:${localPort} -> ${targetIp}:${targetPort}`);
 }
@@ -242,8 +245,8 @@ export async function stopUdpProxy(vmId: string): Promise<void> {
     return;
   }
 
-  const { localPort, targetIp, targetPort } = rule;
-  const extIf = await getExternalInterface();
+  // Use stored interface (avoids race condition if interface changes)
+  const { localPort, targetIp, targetPort, extIf } = rule;
 
   // Remove DNAT rule
   await $`sudo iptables -t nat -D PREROUTING -i ${extIf} -p udp --dport ${localPort} -j DNAT --to-destination ${targetIp}:${targetPort}`.quiet().nothrow();
@@ -256,40 +259,41 @@ export async function stopUdpProxy(vmId: string): Promise<void> {
 }
 
 // Clean up ALL orphaned rules on startup
-// Since VMs don't survive restart (in-memory state), all rules in our port range are orphans
+// Since VMs don't survive restart (in-memory state), all rules targeting our VM subnet are orphans
 //
-// NOTE: Regex parsing of iptables output is fragile (format varies by version/locale).
-// If cleanup fails, orphan rules are harmless (just waste minor resources).
-// For more robust parsing, consider `iptables-save` format in future.
+// Uses iptables-save format which is stable across versions, then deletes by subnet match.
+// This is more robust than regex parsing of iptables -L output.
+//
+// NOTE: Cleanup is best-effort. If it fails (permissions, iptables busy, etc.):
+// - Orphan rules are harmless (they forward to non-existent VMs, traffic is dropped)
+// - New VMs get fresh rules that work correctly
+// - Manual cleanup: sudo iptables -t nat -F (flushes all NAT rules - use with caution)
 export async function cleanupOrphanedUdpRules(): Promise<void> {
   const extIf = await getExternalInterface();
-  const portMin = config.portMin;
-  const portMax = config.portMax;
 
-  // Clean up PREROUTING (DNAT) rules
-  const prerouting = await $`sudo iptables -t nat -L PREROUTING -n`.text().catch(() => "");
-  for (const line of prerouting.split('\n')) {
-    // Match: DNAT udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:22001 to:172.16.0.2:22001
-    const match = line.match(/DNAT\s+udp\s+.*udp dpt:(\d+)\s+to:(172\.16\.\d+\.\d+):(\d+)/);
-    if (match) {
-      const port = parseInt(match[1]);
-      if (port >= portMin && port <= portMax) {
-        log(`Cleaning up orphaned PREROUTING rule for port ${port}`);
-        await $`sudo iptables -t nat -D PREROUTING -i ${extIf} -p udp --dport ${port} -j DNAT --to-destination ${match[2]}:${match[3]}`.quiet().nothrow();
+  // Use iptables-save format for reliable parsing
+  const rules = await $`sudo iptables-save -t nat`.text().catch(() => "");
+
+  for (const line of rules.split('\n')) {
+    // Match PREROUTING DNAT rules targeting our VM subnet (172.16.x.x)
+    // Format: -A PREROUTING -i eth0 -p udp -m udp --dport 22001 -j DNAT --to-destination 172.16.0.2:22001
+    if (line.includes('-A PREROUTING') && line.includes('-p udp') && line.includes('172.16.')) {
+      const portMatch = line.match(/--dport (\d+)/);
+      const destMatch = line.match(/--to-destination (172\.16\.\d+\.\d+:\d+)/);
+      if (portMatch && destMatch) {
+        log(`Cleaning up orphaned PREROUTING rule for port ${portMatch[1]}`);
+        await $`sudo iptables -t nat -D PREROUTING -i ${extIf} -p udp --dport ${portMatch[1]} -j DNAT --to-destination ${destMatch[1]}`.quiet().nothrow();
       }
     }
-  }
 
-  // Clean up POSTROUTING (MASQUERADE) rules
-  const postrouting = await $`sudo iptables -t nat -L POSTROUTING -n`.text().catch(() => "");
-  for (const line of postrouting.split('\n')) {
-    // Match: MASQUERADE udp -- 0.0.0.0/0 172.16.0.2 udp dpt:22001
-    const match = line.match(/MASQUERADE\s+udp\s+.*\s+(172\.16\.\d+\.\d+)\s+udp dpt:(\d+)/);
-    if (match) {
-      const port = parseInt(match[2]);
-      if (port >= portMin && port <= portMax) {
-        log(`Cleaning up orphaned POSTROUTING rule for ${match[1]}:${port}`);
-        await $`sudo iptables -t nat -D POSTROUTING -p udp -d ${match[1]} --dport ${port} -j MASQUERADE`.quiet().nothrow();
+    // Match POSTROUTING MASQUERADE rules targeting our VM subnet
+    // Format: -A POSTROUTING -d 172.16.0.2/32 -p udp -m udp --dport 22001 -j MASQUERADE
+    if (line.includes('-A POSTROUTING') && line.includes('-p udp') && line.includes('-d 172.16.') && line.includes('MASQUERADE')) {
+      const destMatch = line.match(/-d (172\.16\.\d+\.\d+)/);
+      const portMatch = line.match(/--dport (\d+)/);
+      if (destMatch && portMatch) {
+        log(`Cleaning up orphaned POSTROUTING rule for ${destMatch[1]}:${portMatch[1]}`);
+        await $`sudo iptables -t nat -D POSTROUTING -p udp -d ${destMatch[1]} --dport ${portMatch[1]} -j MASQUERADE`.quiet().nothrow();
       }
     }
   }
@@ -344,7 +348,7 @@ await startUdpProxy(vmId, port, ip, port);
 
 In `createVm()` catch block, fix existing bug AND add UDP cleanup:
 
-**Note**: The existing code has a bug - TCP proxy is started but not cleaned up on failure. Fix both:
+**Note**: The existing code has a bug - TCP proxy is started but not cleaned up on failure. This phase fixes both the existing TCP proxy cleanup bug AND adds UDP cleanup. The TCP fix is a prerequisite for reliable operation, not just a "nice to have".
 
 ```typescript
 } catch (e) {
@@ -384,13 +388,20 @@ import { cleanupOrphanedUdpRules } from "./services/udpProxy";
 await cleanupOrphanedUdpRules();
 ```
 
-### Port Constraint
+### Port Constraint (Critical)
 
-**Important**: The external port and VM mosh port must be the same number. This is because mosh's `--port` flag sets both:
+**Important**: The external port and VM mosh port **MUST** be the same number. This is because mosh's `--port` flag sets both:
 1. The port mosh-server listens on inside the VM
 2. The port the client connects to
 
 Since we forward `host:22001 → vm:22001`, this works correctly.
+
+**Implementation Note**: In `createVm()`, we call:
+```typescript
+await startUdpProxy(vmId, port, ip, port);  // localPort == targetPort (required!)
+```
+
+The `port` variable is used for both `localPort` and `targetPort`. This is intentional, not a bug. Changing either would break mosh connectivity. The TCP proxy uses different ports (`port → 22`) because SSH doesn't have this constraint.
 
 ### Verification
 
@@ -508,6 +519,8 @@ cmd_vm_create() {
       -k|--key)
         if [[ "$2" == @* ]]; then
           key_file="${2:1}"
+          # Expand tilde (bash doesn't expand ~ inside quotes)
+          key_file="${key_file/#\~/$HOME}"
           [[ -f "$key_file" ]] || die "Key file not found: $key_file"
           key=$(cat "$key_file")
         else
@@ -536,8 +549,9 @@ cmd_vm_create() {
 }
 ```
 
-### Update `cmd_help()`:
+### Update `cmd_help()` (Phase 3 changes):
 
+Update the `vm create` line:
 ```
   vm create -t TPL [-k KEY]     Create VM (uses managed key if -k omitted)
 ```
@@ -595,7 +609,12 @@ cmd_connect() {
     case "$1" in
       --ssh) use_ssh=true; shift ;;
       -l|--user) user="$2"; shift 2 ;;
-      -i|--identity) identity="$2"; shift 2 ;;
+      -i|--identity)
+        identity="$2"
+        # Expand tilde (bash doesn't expand ~ inside quotes)
+        identity="${identity/#\~/$HOME}"
+        shift 2
+        ;;
       -o) ssh_opts+=("-o" "$2"); shift 2 ;;
       --) shift; ssh_opts+=("$@"); break ;;  # Pass remaining args to SSH
       *) die "Unknown option: $1. Use -- to pass args to SSH." ;;
@@ -623,18 +642,26 @@ cmd_connect() {
 
   if [[ "$use_ssh" == "true" ]]; then
     # Direct SSH connection (fallback if mosh doesn't work)
+    # Use array to preserve quoting for paths with spaces
     exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
   else
-    # Check mosh is installed
+    # Check mosh is installed locally
     if ! command -v mosh &>/dev/null; then
-      echo "mosh not installed, falling back to SSH..." >&2
+      echo "mosh not installed locally, falling back to SSH..." >&2
       echo "Install mosh for better experience: apt install mosh (or brew install mosh)" >&2
       exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
     fi
 
+    # Note: If mosh-server is missing on the VM, mosh will fail with:
+    #   "mosh-server: command not found"
+    # This shouldn't happen with debian-base (Phase 5 installs mosh),
+    # but custom templates might not have it. Use --ssh fallback in that case.
+
     # Build SSH command for mosh
-    # Use printf %q to safely quote each option for shell expansion
-    local ssh_cmd="ssh -p ${ssh_port} -i ${identity} ${base_ssh_opts}"
+    # Use printf %q to safely quote paths with spaces for shell expansion inside mosh --ssh
+    local quoted_identity
+    quoted_identity=$(printf '%q' "$identity")
+    local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity} ${base_ssh_opts}"
     for opt in "${ssh_opts[@]}"; do
       ssh_cmd+=" $(printf '%q' "$opt")"
     done
@@ -652,11 +679,22 @@ Update main() case statement:
 connect) shift; cmd_connect "$@" ;;
 ```
 
-Update `cmd_help()`:
+### Update `cmd_help()` (Phase 4 changes):
 
-```
-  connect <name|id> [--ssh]     Connect to VM via mosh (--ssh for SSH fallback)
-                                Use -- to pass additional args to SSH
+Add the connect command and update version:
+```bash
+# In cmd_help(), add after vm commands:
+  connect <name|id> [options]    Connect to VM via mosh (or SSH with --ssh)
+    Options:
+      --ssh                      Force SSH instead of mosh
+      -l, --user USER            Connect as USER (default: root)
+      -i, --identity FILE        Use specific SSH key
+      --                         Pass remaining args to SSH (e.g., -o ForwardAgent=yes)
+
+# Update version in cmd_version():
+cmd_version() {
+  echo "sb version 0.2.0"  # Bump from 0.1.0
+}
 ```
 
 ### Host Key Handling
