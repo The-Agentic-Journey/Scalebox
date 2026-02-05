@@ -350,14 +350,19 @@ wait_for_https() {
   [[ -n "$API_DOMAIN" ]] || return 0
 
   log "Waiting for HTTPS certificate..."
-  local retries=60
-  while [[ $retries -gt 0 ]]; do
+  local max_retries=60
+  local attempt=1
+  while [[ $attempt -le $max_retries ]]; do
     if curl -sf "https://$API_DOMAIN/health" &>/dev/null; then
       log "HTTPS is ready"
       return 0
     fi
+    # Show progress every 5 attempts (10 seconds)
+    if (( attempt % 5 == 0 )); then
+      log "Still waiting for certificate... (attempt $attempt/$max_retries)"
+    fi
     sleep 2
-    ((retries--)) || true
+    ((attempt++)) || true
   done
   die "Failed to obtain TLS certificate for $API_DOMAIN"
 }
