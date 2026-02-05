@@ -22,7 +22,11 @@ export async function updateCaddyConfig(): Promise<void> {
 		})
 		.join("\n\n");
 
-	const caddyfile = `{
+	const acmeCaLine = config.acmeStaging
+		? "\n\tacme_ca https://acme-staging-v02.api.letsencrypt.org/directory"
+		: "";
+
+	const caddyfile = `{${acmeCaLine}
 	on_demand_tls {
 		ask http://localhost:${config.apiPort}/caddy/check
 	}

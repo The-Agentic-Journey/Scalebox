@@ -13,4 +13,5 @@ export const config = {
 	// Domain for VM HTTPS access (e.g., "vms.example.com")
 	// When set, VMs are accessible at https://{vm-name}.{vmDomain}
 	vmDomain: process.env.VM_DOMAIN || "",
+	acmeStaging: process.env.ACME_STAGING === "true",
 };
