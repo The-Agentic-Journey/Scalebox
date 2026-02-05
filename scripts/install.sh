@@ -366,6 +366,12 @@ wait_for_https() {
 install_binary() {
   log "Installing scaleboxd..."
 
+  # Stop service if running (can't overwrite running binary)
+  if systemctl is-active scaleboxd &>/dev/null; then
+    log "Stopping scaleboxd for update..."
+    systemctl stop scaleboxd
+  fi
+
   if [[ -f "$INSTALL_DIR/scaleboxd" ]]; then
     cp "$INSTALL_DIR/scaleboxd" /usr/local/bin/scaleboxd
     chmod +x /usr/local/bin/scaleboxd
