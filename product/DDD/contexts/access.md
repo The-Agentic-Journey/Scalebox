@@ -1,16 +1,17 @@
 # Access Context
 
 **Classification:** Supporting Domain
-**Source:** `src/services/proxy.ts`, `src/services/caddy.ts`
+**Source:** `src/services/proxy.ts`, `src/services/udpProxy.ts`, `src/services/caddy.ts`
 
 ---
 
 ## Purpose
 
-The Access context provides external connectivity to VMs. It exposes VM services to the outside world through two mechanisms:
+The Access context provides external connectivity to VMs. It exposes VM services to the outside world through three mechanisms:
 
 1. **TCP Proxy:** Port forwarding for SSH access
-2. **HTTPS Gateway:** Caddy reverse proxy for web traffic
+2. **UDP Proxy:** iptables NAT for mosh traffic
+3. **HTTPS Gateway:** Caddy reverse proxy for web traffic
 
 ---
 
@@ -110,6 +111,102 @@ Stops a proxy and cleans up connections.
 | VM error | Destroy client socket, remove from tracking |
 | Client close | Destroy VM socket, remove from tracking |
 | VM close | Destroy client socket, remove from tracking |
+
+---
+
+## Sub-Context: UDP Proxy (Mosh)
+
+### Purpose
+
+Forwards UDP traffic for mosh sessions, enabling roaming shell access with better latency handling than SSH.
+
+### Architecture
+
+```
+External Client                    Host                         VM
+      │                             │                            │
+      │   mosh user@host           │                            │
+      │   --port=22001             │                            │
+      │                             │                            │
+      │   1. SSH (TCP 22001)       │                            │
+      │ ──────────────────────────▶│ TCP Proxy ────────────────▶│ :22
+      │   Start mosh-server -p 22001                            │
+      │◀──────────────────────────│◀────────────────────────────│
+      │   MOSH CONNECT 22001 <key> │                            │
+      │                             │                            │
+      │   2. UDP (22001)           │                            │
+      │ ──────────────────────────▶│ iptables DNAT ────────────▶│ :22001
+      │◀─────────────────────────▶│◀───────────────────────────▶│
+      │   Encrypted mosh session    │                            │
+```
+
+### Implementation
+
+Uses iptables NAT rules (not application-level proxy):
+- **DNAT**: Rewrites destination to VM IP
+- **MASQUERADE**: Ensures return packets route correctly
+
+**iptables rules created per VM:**
+```bash
+# DNAT for incoming UDP
+iptables -t nat -A PREROUTING -i eth0 -p udp --dport 22001 -j DNAT --to-destination 172.16.0.2:22001
+
+# MASQUERADE for return traffic
+iptables -t nat -A POSTROUTING -p udp -d 172.16.0.2 --dport 22001 -j MASQUERADE
+```
+
+### Port Sharing
+
+The same port number serves both protocols:
+- TCP 22001 → SSH (application proxy in scaleboxd)
+- UDP 22001 → mosh (kernel-level NAT via iptables)
+
+This works because TCP and UDP are independent protocols.
+
+### Domain Services
+
+#### startUdpProxy(vmId, localPort, targetIp, targetPort): Promise<void>
+
+Creates iptables NAT rules for UDP forwarding.
+
+```
+1. Get external interface (from default route)
+2. Track rule in memory (for cleanup)
+3. Add DNAT rule for incoming UDP
+4. Add MASQUERADE for return traffic
+5. Verify rules were created
+```
+
+#### stopUdpProxy(vmId: string): Promise<void>
+
+Removes iptables NAT rules using tracked state.
+
+```
+1. Look up rule from memory
+2. Delete DNAT rule
+3. Delete MASQUERADE rule
+4. Remove from tracking
+```
+
+#### cleanupOrphanedUdpRules(): Promise<void>
+
+Cleans up stale iptables rules on server startup. Since VMs don't survive restart (in-memory state), all rules targeting the VM subnet (172.16.x.x) are orphans.
+
+### Lifecycle
+
+| Event | Action |
+|-------|--------|
+| VM Created | Add iptables DNAT + MASQUERADE rules |
+| VM Deleted | Remove iptables rules |
+| Server Startup | Clean up orphaned rules from previous runs |
+
+### Error Handling
+
+| Scenario | Handling |
+|----------|----------|
+| iptables command fails | Rollback any partial rules, throw error |
+| Rules already exist | Commands succeed (idempotent) |
+| Cleanup fails | Best-effort, orphan rules are harmless |
 
 ---
 
@@ -253,12 +350,13 @@ app.get("/caddy/check", (c) => {
 
 ## When Access Context is Triggered
 
-| Event | TCP Proxy | HTTPS Gateway |
-|-------|-----------|---------------|
-| VM Created | `startProxy()` | `updateCaddyConfig()` |
-| VM Deleted | `stopProxy()` | `updateCaddyConfig()` |
+| Event | TCP Proxy | UDP Proxy | HTTPS Gateway |
+|-------|-----------|-----------|---------------|
+| VM Created | `startProxy()` | `startUdpProxy()` | `updateCaddyConfig()` |
+| VM Deleted | `stopProxy()` | `stopUdpProxy()` | `updateCaddyConfig()` |
+| Server Startup | - | `cleanupOrphanedUdpRules()` | - |
 
-Both are called from VM Lifecycle context after VM state changes.
+All are called from VM Lifecycle context after VM state changes.
 
 ---
 
@@ -320,10 +418,14 @@ Both are called from VM Lifecycle context after VM state changes.
 
 ## Code Location
 
-| Component | File | Lines |
-|-----------|------|-------|
-| Proxy state | `src/services/proxy.ts` | 3-4 |
-| startProxy | `src/services/proxy.ts` | 6-56 |
-| stopProxy | `src/services/proxy.ts` | 58-74 |
-| updateCaddyConfig | `src/services/caddy.ts` | 9-49 |
-| /caddy/check endpoint | `src/index.ts` | 21-37 |
+| Component | File |
+|-----------|------|
+| TCP Proxy state | `src/services/proxy.ts` |
+| startProxy | `src/services/proxy.ts` |
+| stopProxy | `src/services/proxy.ts` |
+| UDP Proxy state | `src/services/udpProxy.ts` |
+| startUdpProxy | `src/services/udpProxy.ts` |
+| stopUdpProxy | `src/services/udpProxy.ts` |
+| cleanupOrphanedUdpRules | `src/services/udpProxy.ts` |
+| updateCaddyConfig | `src/services/caddy.ts` |
+| /caddy/check endpoint | `src/index.ts` |

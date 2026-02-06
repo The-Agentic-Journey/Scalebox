@@ -54,6 +54,12 @@ The host port (range `22001-32000`) that proxies to the VM's internal SSH port (
 ### TCP Proxy
 A port-forwarding mechanism that maps a host port to a VM's internal port. Used for SSH access: `host:22001 → vm:22`.
 
+### UDP Proxy
+Kernel-level NAT (iptables DNAT + MASQUERADE) that forwards UDP datagrams to VMs for mosh connectivity. Uses the same port number as SSH (e.g., `host:22001/udp → vm:22001/udp`).
+
+### Mosh Port
+The UDP port (same number as SSH port) used for mosh sessions. Forwarded via iptables NAT to the VM's mosh-server. Mosh requires the same port number for client and server.
+
 ### HTTPS Gateway
 Caddy reverse proxy that routes `https://{vm-name}.{vm-domain}` to the VM's port 8080. Provides automatic TLS via Let's Encrypt.
 
@@ -172,3 +178,11 @@ The user-facing command-line tool for interacting with the Scalebox API. Named `
 **Configuration:** Reads `SCALEBOX_URL` and `SCALEBOX_TOKEN` from environment variables or `~/.config/scalebox/config`.
 
 **Note:** This is different from `scalebox-update`, which is a server-side administration tool.
+
+### Managed SSH Key
+An ed25519 SSH key pair automatically generated and stored by the `sb` CLI at `~/.config/scalebox/id_ed25519`. Used by default for VM creation and connection, removing the need for users to manage SSH keys manually.
+
+**Limitation:** Per-machine. VMs created from one machine are not accessible from another without manually syncing keys or using explicit `-k` flag.
+
+### Connect Command
+The `sb connect` command that establishes a mosh (or SSH fallback) session to a VM. Uses the managed SSH key automatically and retrieves connection details from the API.

@@ -26,6 +26,8 @@ This document provides an overview of all bounded contexts in the Scalebox syste
 
 The sb CLI and other HTTP clients are **external** to the Scalebox server. They interact exclusively through the REST API over HTTPS. The CLI has no special access—it uses the same endpoints available to any authenticated client.
 
+See [CLI Context](contexts/cli.md) for details on the CLI's local state management (SSH keys, configuration).
+
 ---
 
 ## Context Overview
@@ -52,7 +54,8 @@ The sb CLI and other HTTP clients are **external** to the Scalebox server. They 
 │   │                 │   │                 │   │                 │              │
 │   │ Aggregate:      │   │ Services:       │   │ Sub-contexts:   │              │
 │   │ Template        │   │ IP/Port Pool    │   │ - TCP Proxy     │              │
-│   │                 │   │ TAP Device      │   │ - HTTPS Gateway │              │
+│   │                 │   │ TAP Device      │   │ - UDP Proxy     │              │
+│   │                 │   │                 │   │ - HTTPS Gateway │              │
 │   │ src/services/   │   │                 │   │                 │              │
 │   │ template.ts     │   │ src/services/   │   │ src/services/   │              │
 │   └─────────────────┘   │ network.ts      │   │ proxy.ts        │              │
@@ -140,9 +143,10 @@ The sb CLI and other HTTP clients are **external** to the Scalebox server. They 
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Access
 **Integration:**
-- VM creation starts TCP proxy
-- VM deletion stops TCP proxy
+- VM creation starts TCP proxy and UDP proxy
+- VM deletion stops TCP proxy and UDP proxy
 - VM creation/deletion triggers Caddy config update
+- Server startup cleans up orphaned UDP rules
 
 ### [Template](contexts/template.md) → [Storage](contexts/storage.md)
 **Relationship:** Shared Kernel
@@ -216,12 +220,14 @@ No message queues, event buses, or async communication patterns are currently us
 | `src/services/storage.ts` | [Storage](contexts/storage.md) |
 | `src/services/firecracker.ts` | [Hypervisor](contexts/hypervisor.md) |
 | `src/services/proxy.ts` | [Access](contexts/access.md) (TCP Proxy) |
+| `src/services/udpProxy.ts` | [Access](contexts/access.md) (UDP Proxy) |
 | `src/services/caddy.ts` | [Access](contexts/access.md) (HTTPS Gateway) |
 | `src/services/nameGenerator.ts` | [VM Lifecycle](contexts/vm-lifecycle.md) (supporting) |
 | `src/services/wordlists.ts` | [VM Lifecycle](contexts/vm-lifecycle.md) (supporting) |
 | `src/types.ts` | Shared Kernel |
 | `src/config.ts` | Shared Kernel |
 | `src/index.ts` | Application Layer |
+| `scripts/sb` | [CLI](contexts/cli.md) (External Client) |
 
 ---
 
