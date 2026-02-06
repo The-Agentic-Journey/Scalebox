@@ -87,6 +87,21 @@ get_ssh_keyfile() {
   echo "$key_file"
 }
 
+# Extract hostname from SCALEBOX_HOST URL
+get_ssh_host() {
+  # Extract hostname from URL, handling:
+  # - Protocol: https://host -> host
+  # - Auth: user:pass@host -> host
+  # - Port: host:8080 -> host
+  # - Path: host/path -> host
+  local host="$SCALEBOX_HOST"
+  host="${host#*://}"      # Remove protocol
+  host="${host##*@}"       # Remove userinfo (user:pass@)
+  host="${host%%:*}"       # Remove port (keep first part before :)
+  host="${host%%/*}"       # Remove path
+  echo "$host"
+}
+
 # === API Client ===
 api() {
   local method=$1 path=$2; shift 2
@@ -435,6 +450,87 @@ cmd_vm_wait() {
   output_error "Timeout waiting for SSH on port $ssh_port after ${timeout}s" 1
 }
 
+cmd_connect() {
+  need_config
+  local id="${1:-}"
+  shift || true
+
+  local user="root"
+  local identity=""
+  local use_ssh=false
+  local ssh_opts=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ssh) use_ssh=true; shift ;;
+      -l|--user) user="$2"; shift 2 ;;
+      -i|--identity)
+        identity="$2"
+        # Expand tilde if HOME is set (bash doesn't expand ~ inside quotes)
+        if [[ -n "${HOME:-}" ]]; then
+          identity="${identity/#\~/$HOME}"
+        fi
+        shift 2
+        ;;
+      -o) ssh_opts+=("-o" "$2"); shift 2 ;;
+      --) shift; ssh_opts+=("$@"); break ;;  # Pass remaining args to SSH
+      *) die "Unknown option: $1. Use -- to pass args to SSH." ;;
+    esac
+  done
+
+  [[ -n "$id" ]] || die "Usage: sb connect <name|id> [--ssh] [-l USER] [-i KEYFILE] [-- SSH_ARGS...]"
+
+  # Use managed key if none provided
+  if [[ -z "$identity" ]]; then
+    identity=$(get_ssh_keyfile)
+  fi
+
+  # Get VM details
+  local vm_data ssh_port
+  vm_data=$(api GET "/vms/$id") || { echo "$vm_data"; return 1; }
+  ssh_port=$(echo "$vm_data" | jq -r '.ssh_port')
+
+  # Extract host from SCALEBOX_HOST
+  local ssh_host
+  ssh_host=$(get_ssh_host)
+
+  # Common SSH options for ephemeral VMs:
+  # - StrictHostKeyChecking=accept-new: Accept new keys, warn on changes
+  # - UserKnownHostsFile=/dev/null: Don't pollute known_hosts with ephemeral VM keys
+  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+
+  if [[ "$use_ssh" == "true" ]]; then
+    # Direct SSH connection (fallback if mosh doesn't work)
+    exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
+  else
+    # Check mosh is installed locally
+    if ! command -v mosh &>/dev/null; then
+      echo "mosh not installed locally, falling back to SSH..." >&2
+      echo "Install mosh for better experience: apt install mosh (or brew install mosh)" >&2
+      exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
+    fi
+
+    # Note: If mosh-server is missing on the VM, mosh will fail with:
+    #   "mosh-server: command not found"
+    # This shouldn't happen with debian-base (Phase 5 installs mosh),
+    # but custom templates might not have it. Use --ssh fallback in that case.
+
+    # Build SSH command for mosh
+    # Use printf %q to safely quote paths with spaces for shell expansion inside mosh --ssh
+    local quoted_identity
+    quoted_identity=$(printf '%q' "$identity")
+    local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity}"
+    ssh_cmd+=" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+    for opt in "${ssh_opts[@]}"; do
+      ssh_cmd+=" $(printf '%q' "$opt")"
+    done
+
+    # Connect via mosh
+    # --port tells mosh-server which port to use AND which port client connects to
+    exec mosh --ssh="$ssh_cmd" --port="$ssh_port" "${user}@${ssh_host}"
+  fi
+}
+
 cmd_template_list() {
   need_config
   local response
@@ -486,6 +582,13 @@ Commands:
   vm snapshot <name|id> -n NAME Snapshot VM to template
   vm wait <name|id> --ssh       Wait for SSH to be ready
 
+  connect <name|id> [options]   Connect to VM via mosh (or SSH with --ssh)
+    Options:
+      --ssh                     Force SSH instead of mosh
+      -l, --user USER           Connect as USER (default: root)
+      -i, --identity FILE       Use specific SSH key
+      --                        Pass remaining args to SSH
+
   template list                 List templates
   template delete <name>        Delete template
 
@@ -501,8 +604,10 @@ Environment Variables:
 
 Examples:
   sb login
-  sb vm create -t debian-base -k @~/.ssh/id_rsa.pub
+  sb vm create -t debian-base
   sb vm list
+  sb connect my-vm-name
+  sb connect my-vm-name --ssh
   sb --json vm get my-vm-name
   sb vm wait my-vm-name --ssh --timeout 120
   sb vm snapshot my-vm-name -n my-snapshot
@@ -555,6 +660,7 @@ main() {
         *) die "Usage: sb vm [list|create|get|delete|snapshot|wait]" ;;
       esac
       ;;
+    connect) shift; cmd_connect "$@" ;;
     template)
       case "${2:-}" in
         list) cmd_template_list ;;
