@@ -115,6 +115,28 @@ describe("Firecracker API", () => {
 		expect(vm?.id).toBe(created.id);
 	});
 
+	test("get VM by name returns details", async () => {
+		const created = await sbVmCreate("debian-base");
+		createdVmIds.push(created.id as string);
+
+		// Lookup by name instead of ID
+		const vm = await sbVmGet(created.name as string);
+		expect(vm?.id).toBe(created.id);
+		expect(vm?.name).toBe(created.name);
+	});
+
+	test("delete VM by name works", async () => {
+		const created = await sbVmCreate("debian-base");
+		// Don't add to createdVmIds since we'll delete by name
+
+		// Delete by name instead of ID
+		await sbVmDelete(created.name as string);
+
+		// Verify it's gone
+		const vms = await sbVmList();
+		expect(vms.some((v) => v.id === created.id)).toBe(false);
+	});
+
 	test("delete VM returns 204", async () => {
 		const created = await sbVmCreate("debian-base");
 
