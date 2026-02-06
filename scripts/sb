@@ -35,6 +35,58 @@ need_config() {
   [[ -n "${SCALEBOX_TOKEN:-}" ]] || die "No token configured. Run 'sb login' first or set SCALEBOX_TOKEN."
 }
 
+# === SSH Key Management ===
+# Generate SSH key if not present, validate if exists
+ensure_ssh_key() {
+  local key_file="$SCALEBOX_CONFIG_DIR/id_ed25519"
+  local pub_file="${key_file}.pub"
+
+  # Check if both files exist
+  if [[ -f "$key_file" && -f "$pub_file" ]]; then
+    # Fix permissions FIRST (ssh-keygen -l may fail if permissions are wrong)
+    chmod 600 "$key_file" 2>/dev/null || true
+    chmod 644 "$pub_file" 2>/dev/null || true
+
+    # Then validate key format
+    if ssh-keygen -l -f "$key_file" &>/dev/null; then
+      return 0
+    else
+      echo "Warning: Existing SSH key is invalid, regenerating..." >&2
+      rm -f "$key_file" "$pub_file"
+    fi
+  elif [[ -f "$key_file" || -f "$pub_file" ]]; then
+    # One file exists but not the other - corrupted state
+    echo "Warning: Incomplete SSH key pair, regenerating..." >&2
+    rm -f "$key_file" "$pub_file"
+  fi
+
+  # Generate new key
+  echo "Generating SSH key for Scalebox..." >&2
+  mkdir -p "$SCALEBOX_CONFIG_DIR" || die "Failed to create config directory"
+  chmod 700 "$SCALEBOX_CONFIG_DIR" || die "Failed to set config directory permissions"
+
+  if ! ssh-keygen -t ed25519 -f "$key_file" -N "" -C "scalebox" >/dev/null 2>&1; then
+    die "Failed to generate SSH key"
+  fi
+
+  chmod 600 "$key_file" || die "Failed to set private key permissions"
+  chmod 644 "$pub_file" || die "Failed to set public key permissions"
+}
+
+# Get public key content
+get_ssh_pubkey() {
+  local key_file="$SCALEBOX_CONFIG_DIR/id_ed25519.pub"
+  ensure_ssh_key
+  cat "$key_file"
+}
+
+# Get private key path
+get_ssh_keyfile() {
+  local key_file="$SCALEBOX_CONFIG_DIR/id_ed25519"
+  ensure_ssh_key
+  echo "$key_file"
+}
+
 # === API Client ===
 api() {
   local method=$1 path=$2; shift 2
@@ -260,6 +312,10 @@ cmd_vm_create() {
         if [[ "$2" == @* ]]; then
           # @filepath syntax - read from file
           key_file="${2:1}"
+          # Expand tilde if HOME is set (bash doesn't expand ~ inside quotes)
+          if [[ -n "${HOME:-}" ]]; then
+            key_file="${key_file/#\~/$HOME}"
+          fi
           [[ -f "$key_file" ]] || die "Key file not found: $key_file"
           key=$(cat "$key_file")
         else
@@ -272,7 +328,11 @@ cmd_vm_create() {
   done
 
   [[ -n "$template" ]] || die "Template required: -t TEMPLATE"
-  [[ -n "$key" ]] || die "SSH key required: -k 'ssh-rsa ...' or -k @/path/to/key.pub"
+
+  # Use managed key if none provided
+  if [[ -z "$key" ]]; then
+    key=$(get_ssh_pubkey)
+  fi
 
   local response
   if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
@@ -401,7 +461,7 @@ cmd_template_delete() {
 }
 
 cmd_version() {
-  echo "sb version 0.1.0"
+  echo "sb version 0.2.0"
 }
 
 cmd_help() {
@@ -420,7 +480,7 @@ Commands:
   status                        Health check (no auth required)
 
   vm list                       List VMs
-  vm create -t TPL -k KEY       Create VM (-k @file.pub or -k "ssh-rsa ...")
+  vm create -t TPL [-k KEY]     Create VM (uses managed key if -k omitted)
   vm get <name|id>              Get VM details
   vm delete <name|id>           Delete VM
   vm snapshot <name|id> -n NAME Snapshot VM to template
