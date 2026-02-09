@@ -118,6 +118,28 @@ SCALEBOX_TOKEN=sb-xxx...
 
 The CLI searches: env vars → `~/.config/scalebox/config` → `/etc/scalebox/config`
 
+## Template Management
+
+### Rebuilding the Base Template
+
+After certain updates, the `debian-base` template may need to be rebuilt to include new packages. The `scalebox-update` command will notify you when this is needed:
+
+```
+==> Template update available
+    Current: v1, Required: v2
+    Run: scalebox-rebuild-template
+```
+
+To rebuild the template:
+
+```bash
+sudo scalebox-rebuild-template
+```
+
+This recreates the `debian-base` template with the latest packages (takes 2-3 minutes).
+
+**Running VMs are not affected** - they continue using their existing rootfs copies due to btrfs copy-on-write. Only new VMs created after the rebuild will use the updated template.
+
 ## CLI Reference
 
 ```bash

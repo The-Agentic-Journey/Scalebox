@@ -186,3 +186,9 @@ An ed25519 SSH key pair automatically generated and stored by the `sb` CLI at `~
 
 ### Connect Command
 The `sb connect` command that establishes a mosh (or SSH fallback) session to a VM. Uses the managed SSH key automatically and retrieves connection details from the API.
+
+### Template Version
+A version number stored in `debian-base.version` that tracks template contents. Incremented when template packages change (e.g., when mosh was added). Used by `scalebox-update` to detect when templates need rebuilding.
+
+### Template Rebuild
+The process of recreating a template with updated packages using `scalebox-rebuild-template`. Required after updates that add new packages to the base template. Running VMs are not affected due to btrfs copy-on-write - they continue using their existing rootfs copies while new VMs use the updated template.
