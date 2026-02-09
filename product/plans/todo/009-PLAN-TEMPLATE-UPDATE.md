@@ -81,7 +81,7 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
        echo ""
        echo "==> Template update available"
        echo "    Current: v${current_version}, Required: v${REQUIRED_TEMPLATE_VERSION}"
-       echo "    Run: scalebox-update --rebuild-template"
+       echo "    Run: scalebox-rebuild-template"
        echo ""
        return 1
      fi
@@ -108,12 +108,28 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
 
 ### Phase 3: Template Rebuild Command
 
-**Goal:** Add `--rebuild-template` flag to safely recreate the base template.
+**Goal:** Create a separate `scalebox-rebuild-template` command to safely recreate the base template.
 
 **Changes:**
 
-1. Add `rebuild_template()` function to `scalebox-update`:
+1. Create `scripts/scalebox-rebuild-template`:
    ```bash
+   #!/bin/bash
+   set -euo pipefail
+
+   # Scalebox Template Rebuild Tool
+   # Recreates the debian-base template with latest packages
+
+   DATA_DIR="/var/lib/scalebox"
+   TEMPLATE_VERSION=2
+
+   log() { echo "==> $1"; }
+   die() { echo "Error: $1" >&2; exit 1; }
+
+   check_root() {
+     [[ $EUID -eq 0 ]] || die "Must be run as root"
+   }
+
    rebuild_template() {
      local template_path="$DATA_DIR/templates/debian-base.ext4"
      local backup_path="$DATA_DIR/templates/debian-base.ext4.old"
@@ -121,10 +137,10 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
      log "Rebuilding debian-base template..."
 
      # Check for running VMs (they're fine - btrfs COW handles it)
-     # But warn the user about the situation
+     # But inform the user about the situation
      if systemctl is-active scaleboxd &>/dev/null; then
        local vm_count
-       vm_count=$(curl -sf -H "Authorization: Bearer $API_TOKEN" \
+       vm_count=$(curl -sf -H "Authorization: Bearer $(grep API_TOKEN /etc/scaleboxd/config | cut -d= -f2)" \
          "http://localhost:8080/vms" 2>/dev/null | jq '.vms | length' || echo "0")
        if [[ "$vm_count" -gt 0 ]]; then
          echo "Note: $vm_count VM(s) currently running."
@@ -140,10 +156,9 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
        mv "$template_path" "$backup_path"
      fi
 
-     # Recreate template using install.sh function
-     # We need to extract the create_rootfs function or call install.sh with a flag
+     # Recreate template using shared build script
      log "Creating new template (this takes 2-3 minutes)..."
-     if ! create_rootfs_standalone; then
+     if ! source /usr/local/lib/scalebox/template-build.sh && build_debian_base "$DATA_DIR"; then
        # Restore backup on failure
        if [[ -f "$backup_path" ]]; then
          log "Template creation failed, restoring backup..."
@@ -155,29 +170,21 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
      # Remove backup on success
      rm -f "$backup_path"
 
-     log "Template rebuilt successfully (v${REQUIRED_TEMPLATE_VERSION})"
+     log "Template rebuilt successfully (v${TEMPLATE_VERSION})"
    }
+
+   main() {
+     check_root
+     rebuild_template
+   }
+
+   main "$@"
    ```
 
-2. Add `create_rootfs_standalone()` function that contains the template creation logic (extracted from install.sh or sourced from a shared location).
-
-3. Parse `--rebuild-template` flag in main:
-   ```bash
-   case "${1:-}" in
-     --rebuild-template)
-       check_root
-       load_config
-       rebuild_template
-       exit 0
-       ;;
-     *)
-       # Normal update flow
-       ;;
-   esac
-   ```
+2. Install to `/usr/local/bin/scalebox-rebuild-template` during update.
 
 **Verification:**
-- `scalebox-update --rebuild-template` recreates template
+- `scalebox-rebuild-template` recreates template
 - Running VMs continue to work during and after rebuild
 - New VMs use the new template
 - Template version file is updated
@@ -185,8 +192,8 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
 **Files:**
 | File | Action | Purpose |
 |------|--------|---------|
-| `scripts/scalebox-update` | Modify | Add --rebuild-template command |
-| `scripts/template-build.sh` | Create | Shared template creation logic |
+| `scripts/scalebox-rebuild-template` | Create | Standalone rebuild command |
+| `scripts/scalebox-update` | Modify | Install the new script during updates |
 
 ---
 
@@ -199,7 +206,8 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
 1. Create `scripts/template-build.sh` with the template creation logic:
    ```bash
    #!/bin/bash
-   # Template build script - used by install.sh and scalebox-update
+   # Template build script - used by install.sh and scalebox-rebuild-template
+   # Installed to: /usr/local/lib/scalebox/template-build.sh
 
    TEMPLATE_VERSION=2
 
@@ -230,7 +238,7 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
      cleanup_build "$rootfs_dir" "$mount_dir"
    }
 
-   # ... helper functions ...
+   # ... helper functions (configure_rootfs, create_ext4_image, cleanup_build) ...
    ```
 
 2. Update `install.sh` to source and use this script:
@@ -246,26 +254,32 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
    }
    ```
 
-3. Update `scalebox-update` to use this script:
+3. Update `scalebox-update` to install the shared script:
    ```bash
-   create_rootfs_standalone() {
-     # Download and source template-build.sh from release
-     source "$temp_dir/template-build.sh"
-     build_debian_base "$DATA_DIR"
+   install_new() {
+     # ... existing installs ...
+
+     # Install shared library
+     mkdir -p /usr/local/lib/scalebox
+     install -m 644 "$temp_dir/template-build.sh" /usr/local/lib/scalebox/
+
+     # Install rebuild command
+     install -m 755 "$temp_dir/scalebox-rebuild-template" /usr/local/bin/
    }
    ```
 
 **Verification:**
 - Fresh install uses shared script
-- Template rebuild uses shared script
+- `scalebox-rebuild-template` uses shared script
 - Both produce identical templates
 
 **Files:**
 | File | Action | Purpose |
 |------|--------|---------|
 | `scripts/template-build.sh` | Create | Shared template creation logic |
+| `scripts/scalebox-rebuild-template` | Create | Standalone rebuild command |
 | `scripts/install.sh` | Modify | Use shared script |
-| `scripts/scalebox-update` | Modify | Use shared script |
+| `scripts/scalebox-update` | Modify | Install shared script and rebuild command |
 
 ---
 
@@ -280,7 +294,7 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
    - Add "Template Rebuild" term
 
 2. Update `README.md` (or create operations guide):
-   - Document `scalebox-update --rebuild-template`
+   - Document `scalebox-rebuild-template`
    - Explain when template rebuilds are needed
    - Note that running VMs are not affected
 
@@ -300,8 +314,9 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
 | File | Action | Purpose |
 |------|--------|---------|
 | `scripts/template-build.sh` | Create | Shared template creation logic |
+| `scripts/scalebox-rebuild-template` | Create | Standalone rebuild command |
 | `scripts/install.sh` | Modify | Use shared script, write version |
-| `scripts/scalebox-update` | Modify | Add version check and rebuild command |
+| `scripts/scalebox-update` | Modify | Add version check, install rebuild command |
 | `product/DDD/glossary.md` | Modify | Add new terms |
 | `README.md` | Modify | Document template operations |
 
@@ -316,7 +331,7 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
    - Provides command to rebuild
 
 3. **Template rebuild:**
-   - `scalebox-update --rebuild-template` works
+   - `scalebox-rebuild-template` works
    - Running VMs continue to work
    - New VMs have mosh installed
    - Version file updated
@@ -329,7 +344,8 @@ When Scalebox is updated, the `debian-base` template may need to be recreated to
 - **Config changes**: None
 - **Storage changes**: New version file (created on demand)
 - **Dependency changes**: None (debootstrap already installed)
-- **Migration needed**: No - explicit user action via `--rebuild-template`
+- **Migration needed**: No - explicit user action via `scalebox-rebuild-template`
+- **New files installed**: `/usr/local/bin/scalebox-rebuild-template`, `/usr/local/lib/scalebox/template-build.sh`
 
 ## Alternative Considered: Automatic Rebuild
 
