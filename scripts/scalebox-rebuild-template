@@ -5,7 +5,7 @@ set -euo pipefail
 # Recreates the debian-base template with latest packages
 
 DATA_DIR="/var/lib/scalebox"
-TEMPLATE_VERSION=2
+TEMPLATE_VERSION=3
 
 log() { echo "==> $1"; }
 die() { echo "Error: $1" >&2; exit 1; }

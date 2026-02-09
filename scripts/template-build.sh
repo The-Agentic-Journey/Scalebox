@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=2
+TEMPLATE_VERSION=3
 
 # Cleanup function for build directories
 cleanup_build() {
@@ -23,6 +23,11 @@ configure_rootfs() {
   local rootfs_dir="$1"
 
   chroot "$rootfs_dir" /bin/bash <<'CHROOT'
+# Configure locale for mosh
+sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
+echo 'LANG=en_US.UTF-8' > /etc/default/locale
+
 # Disable root password (key-only auth)
 passwd -d root
 
@@ -85,7 +90,7 @@ build_debian_base() {
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT
 
   # Run debootstrap with all required packages
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh \
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="The-Agentic-Journey/Scalebox"
-REQUIRED_TEMPLATE_VERSION=2
+REQUIRED_TEMPLATE_VERSION=3
 DATA_DIR="/var/lib/scalebox"
 SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
 SERVICE_FILE="/etc/systemd/system/scaleboxd.service"

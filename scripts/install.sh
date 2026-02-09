@@ -20,7 +20,7 @@ ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-TEMPLATE_VERSION=2
+TEMPLATE_VERSION=3
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -262,11 +262,16 @@ create_rootfs() {
   mkdir -p "$rootfs_dir" "$mount_dir"
 
   # Debootstrap minimal Debian
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh \
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs
   chroot "$rootfs_dir" /bin/bash <<'CHROOT'
+# Configure locale for mosh
+sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
+echo 'LANG=en_US.UTF-8' > /etc/default/locale
+
 # Disable root password (key-only auth)
 passwd -d root
 
