@@ -230,6 +230,10 @@ EOF
 }
 
 # === Create Base Template ===
+# Try to use the shared template-build.sh library if available.
+# Fall back to inline code for fresh installs before the library is installed.
+_TEMPLATE_BUILD_LIB="/usr/local/lib/scalebox/template-build.sh"
+
 create_rootfs() {
   local template_path="$DATA_DIR/templates/debian-base.ext4"
 
@@ -240,6 +244,17 @@ create_rootfs() {
 
   log "Creating Debian base template (this takes a few minutes)..."
 
+  # Use shared library if available (installed by scalebox-update)
+  if [[ -f "$_TEMPLATE_BUILD_LIB" ]]; then
+    # shellcheck source=/dev/null
+    source "$_TEMPLATE_BUILD_LIB"
+    build_debian_base "$DATA_DIR"
+    return
+  fi
+
+  # Fallback: inline template creation for fresh installs
+  # This code is duplicated from template-build.sh to ensure install.sh
+  # works standalone before the first update installs the library.
   local rootfs_dir="/tmp/rootfs-$$"
   local mount_dir="/tmp/mount-$$"
   TEMP_DIRS+=("$rootfs_dir" "$mount_dir")

@@ -90,6 +90,15 @@ install_new() {
     mv "/usr/local/bin/scalebox-rebuild-template.new" "/usr/local/bin/scalebox-rebuild-template"
   fi
 
+  # Install shared template build library
+  if [[ -f "$temp_dir/template-build.sh" ]]; then
+    log "Installing template-build.sh library..."
+    mkdir -p /usr/local/lib/scalebox
+    cp "$temp_dir/template-build.sh" "/usr/local/lib/scalebox/template-build.sh.new"
+    chmod 644 "/usr/local/lib/scalebox/template-build.sh.new"
+    mv "/usr/local/lib/scalebox/template-build.sh.new" "/usr/local/lib/scalebox/template-build.sh"
+  fi
+
   # Only update service file if different
   if ! diff -q "$temp_dir/scaleboxd.service" "$SERVICE_FILE" &>/dev/null; then
     log "Updating systemd service file..."

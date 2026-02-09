@@ -278,6 +278,7 @@ do_build() {
   cp scripts/scaleboxd.service builds/
   cp scripts/scalebox-update builds/
   cp scripts/scalebox-rebuild-template builds/
+  cp scripts/template-build.sh builds/
 
   # Backward compatibility: include scalebox as copy of sb for old scalebox-update scripts
   cp scripts/sb builds/scalebox
