@@ -7,6 +7,7 @@ set -euo pipefail
 
 REPO="The-Agentic-Journey/Scalebox"
 REQUIRED_TEMPLATE_VERSION=2
+DATA_DIR="/var/lib/scalebox"
 SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
 SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
 HEALTH_URL="http://localhost:8080/health"
@@ -133,6 +134,25 @@ cleanup() {
   rm -f "${SCALEBOXD_BIN}.prev" 2>/dev/null || true
 }
 
+check_template_version() {
+  local version_file="$DATA_DIR/templates/debian-base.version"
+  local current_version=0
+
+  if [[ -f "$version_file" ]]; then
+    current_version=$(cat "$version_file")
+  fi
+
+  if [[ "$current_version" -lt "$REQUIRED_TEMPLATE_VERSION" ]]; then
+    echo ""
+    echo "==> Template update available"
+    echo "    Current: v${current_version}, Required: v${REQUIRED_TEMPLATE_VERSION}"
+    echo "    Run: scalebox-rebuild-template"
+    echo ""
+    return 1
+  fi
+  return 0
+}
+
 migrate_caddy_config() {
   local caddyfile="/etc/caddy/Caddyfile"
   local vmsfile="/etc/caddy/vms.caddy"
@@ -249,6 +269,7 @@ main() {
   start_service
 
   if health_check; then
+    check_template_version || true  # Warn but don't fail
     cleanup
     log "Update complete!"
     exit 0
