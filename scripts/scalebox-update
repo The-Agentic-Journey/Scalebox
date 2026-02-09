@@ -82,6 +82,14 @@ install_new() {
     mv "/usr/local/bin/scalebox-update.new" "/usr/local/bin/scalebox-update"
   fi
 
+  # Install rebuild command
+  if [[ -f "$temp_dir/scalebox-rebuild-template" ]]; then
+    log "Installing scalebox-rebuild-template..."
+    cp "$temp_dir/scalebox-rebuild-template" "/usr/local/bin/scalebox-rebuild-template.new"
+    chmod +x "/usr/local/bin/scalebox-rebuild-template.new"
+    mv "/usr/local/bin/scalebox-rebuild-template.new" "/usr/local/bin/scalebox-rebuild-template"
+  fi
+
   # Only update service file if different
   if ! diff -q "$temp_dir/scaleboxd.service" "$SERVICE_FILE" &>/dev/null; then
     log "Updating systemd service file..."

@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+
+# Scalebox Template Rebuild Tool
+# Recreates the debian-base template with latest packages
+
+DATA_DIR="/var/lib/scalebox"
+TEMPLATE_VERSION=2
+
+log() { echo "==> $1"; }
+die() { echo "Error: $1" >&2; exit 1; }
+
+check_root() {
+  [[ $EUID -eq 0 ]] || die "Must be run as root"
+}
+
+rebuild_template() {
+  local template_path="$DATA_DIR/templates/debian-base.ext4"
+  local backup_path="$DATA_DIR/templates/debian-base.ext4.old"
+
+  log "Rebuilding debian-base template..."
+
+  # Check for running VMs (they're fine - btrfs COW handles it)
+  # But inform the user about the situation
+  if systemctl is-active scaleboxd &>/dev/null; then
+    local vm_count
+    vm_count=$(curl -sf -H "Authorization: Bearer $(grep API_TOKEN /etc/scaleboxd/config | cut -d= -f2)" \
+      "http://localhost:8080/vms" 2>/dev/null | jq '.vms | length' || echo "0")
+    if [[ "$vm_count" -gt 0 ]]; then
+      echo "Note: $vm_count VM(s) currently running."
+      echo "      They will continue to work (btrfs copy-on-write)."
+      echo "      New VMs will use the updated template."
+      echo ""
+    fi
+  fi
+
+  # Backup existing template
+  if [[ -f "$template_path" ]]; then
+    log "Backing up existing template..."
+    mv "$template_path" "$backup_path"
+  fi
+
+  # Recreate template using shared build script
+  log "Creating new template (this takes 2-3 minutes)..."
+  if ! source /usr/local/lib/scalebox/template-build.sh || ! build_debian_base "$DATA_DIR"; then
+    # Restore backup on failure
+    if [[ -f "$backup_path" ]]; then
+      log "Template creation failed, restoring backup..."
+      mv "$backup_path" "$template_path"
+    fi
+    die "Template rebuild failed"
+  fi
+
+  # Remove backup on success
+  rm -f "$backup_path"
+
+  log "Template rebuilt successfully (v${TEMPLATE_VERSION})"
+}
+
+main() {
+  check_root
+  rebuild_template
+}
+
+main "$@"
