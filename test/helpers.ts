@@ -220,3 +220,13 @@ export async function sbStatus(): Promise<Record<string, unknown>> {
 	}
 	return result.data;
 }
+
+// Connect command helper - returns result for error checking
+// Note: This exercises the connect code path but will fail before exec
+// because the VM lookup happens before the SSH/mosh connection
+export async function sbConnectRaw(
+	nameOrId: string,
+	...args: string[]
+): Promise<{ exitCode: number; data: Record<string, unknown> | null; error: string | null }> {
+	return sbCmd("connect", nameOrId, "--ssh", ...args);
+}

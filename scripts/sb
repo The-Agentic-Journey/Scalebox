@@ -501,13 +501,14 @@ cmd_connect() {
 
   if [[ "$use_ssh" == "true" ]]; then
     # Direct SSH connection (fallback if mosh doesn't work)
-    exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
+    # Note: ${ssh_opts[@]+...} handles empty array on bash 3.2 (macOS) with set -u
+    exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} "${user}@${ssh_host}"
   else
     # Check mosh is installed locally
     if ! command -v mosh &>/dev/null; then
       echo "mosh not installed locally, falling back to SSH..." >&2
       echo "Install mosh for better experience: apt install mosh (or brew install mosh)" >&2
-      exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts "${ssh_opts[@]}" "${user}@${ssh_host}"
+      exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} "${user}@${ssh_host}"
     fi
 
     # Note: If mosh-server is missing on the VM, mosh will fail with:
@@ -521,7 +522,8 @@ cmd_connect() {
     quoted_identity=$(printf '%q' "$identity")
     local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity}"
     ssh_cmd+=" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
-    for opt in "${ssh_opts[@]}"; do
+    # Note: ${ssh_opts[@]+...} handles empty array on bash 3.2 (macOS) with set -u
+    for opt in ${ssh_opts[@]+"${ssh_opts[@]}"}; do
       ssh_cmd+=" $(printf '%q' "$opt")"
     done
 

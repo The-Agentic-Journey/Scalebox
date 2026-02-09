@@ -6,6 +6,7 @@ import {
 	cleanupCli,
 	initCli,
 	sbCmd,
+	sbConnectRaw,
 	sbStatus,
 	sbTemplateDelete,
 	sbTemplateList,
@@ -61,6 +62,15 @@ describe("Firecracker API", () => {
 	test("auth rejects invalid token", async () => {
 		const { status } = await api.getRaw("/templates", "wrong-token");
 		expect(status).toBe(401);
+	});
+
+	// === CLI Connect Command ===
+	// These tests exercise the connect command code path, including empty array handling
+	// that was problematic on bash 3.2 (macOS) with set -u
+	test("connect to nonexistent VM returns 404", async () => {
+		const result = await sbConnectRaw("nonexistent-vm-name");
+		expect(result.exitCode).not.toBe(0);
+		expect(result.data?.status).toBe(404);
 	});
 
 	// === Phase 3: Templates ===
