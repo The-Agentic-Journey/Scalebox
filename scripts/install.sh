@@ -20,6 +20,7 @@ ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+TEMPLATE_VERSION=2
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -286,6 +287,9 @@ CHROOT
 
   # Atomic rename to final path
   mv "$tmp_path" "$template_path"
+
+  # Write version file
+  echo "$TEMPLATE_VERSION" > "$DATA_DIR/templates/debian-base.version"
 
   # Cleanup
   rm -rf "$rootfs_dir" "$mount_dir"
