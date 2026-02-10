@@ -1,0 +1,44 @@
+#!/bin/bash
+# Resize scalebox storage to use 80% of available host disk space
+
+set -euo pipefail
+
+img="/var/lib/scalebox.img"
+mount="/var/lib/scalebox"
+
+if [[ ! -f "$img" ]]; then
+  echo "Error: Storage image not found at $img"
+  exit 1
+fi
+
+if ! mountpoint -q "$mount" 2>/dev/null; then
+  echo "Error: $mount is not mounted"
+  exit 1
+fi
+
+current_size=$(stat -c%s "$img")
+current_gb=$((current_size / 1024 / 1024 / 1024))
+
+# Available = free space on host + current image size (since image is on same disk)
+free_bytes=$(df --output=avail -B1 /var/lib | tail -1)
+available_gb=$(( (free_bytes + current_size) / 1024 / 1024 / 1024 ))
+new_gb=$((available_gb * 80 / 100))
+
+echo "Current:   ${current_gb}GB"
+echo "Available: ${available_gb}GB"
+echo "New size:  ${new_gb}GB (80%)"
+
+if [[ $new_gb -le $current_gb ]]; then
+  echo "Already at or above target size, nothing to do."
+  exit 0
+fi
+
+read -p "Resize? [y/N] " -n 1 -r
+echo
+[[ $REPLY =~ ^[Yy]$ ]] || exit 0
+
+truncate -s "${new_gb}G" "$img"
+losetup -c /dev/loop0  # refresh loop device size
+btrfs filesystem resize max "$mount"
+
+echo "Done: $(df -h "$mount" | tail -1 | awk '{print $2}') total"
