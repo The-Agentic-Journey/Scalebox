@@ -45,7 +45,7 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
 		attempts++;
 		const elapsed = Math.round((Date.now() - start) / 1000);
 		try {
-			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} exit`.quiet();
+			await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -i ${TEST_PRIVATE_KEY_PATH} user@${VM_HOST} exit`.quiet();
 			console.log(`SSH ready on port ${sshPort} after ${elapsed}s (${attempts} attempts)`);
 			return;
 		} catch (e) {
@@ -67,7 +67,7 @@ export async function waitForSsh(sshPort: number, timeoutMs: number): Promise<vo
 }
 
 export async function sshExec(sshPort: number, command: string): Promise<string> {
-	return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} root@${VM_HOST} ${command}`.text();
+	return await $`ssh -p ${sshPort} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i ${TEST_PRIVATE_KEY_PATH} user@${VM_HOST} ${command}`.text();
 }
 
 // === NEW: CLI Test Helpers ===

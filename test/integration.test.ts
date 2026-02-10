@@ -263,9 +263,9 @@ describe("Firecracker API", () => {
 			await waitForSsh(vm1.ssh_port as number, 90000);
 
 			const testContent = `test-content-${Date.now()}`;
-			await sshExec(vm1.ssh_port as number, `echo "${testContent}" > /root/testfile.txt`);
+			await sshExec(vm1.ssh_port as number, `echo "${testContent}" > /home/user/testfile.txt`);
 
-			const verifyContent = await sshExec(vm1.ssh_port as number, "cat /root/testfile.txt");
+			const verifyContent = await sshExec(vm1.ssh_port as number, "cat /home/user/testfile.txt");
 			expect(verifyContent.trim()).toBe(testContent);
 
 			await sshExec(vm1.ssh_port as number, "sync");
@@ -279,7 +279,7 @@ describe("Firecracker API", () => {
 			createdVmIds.push(vm2.id as string);
 
 			await waitForSsh(vm2.ssh_port as number, 90000);
-			const content = await sshExec(vm2.ssh_port as number, "cat /root/testfile.txt");
+			const content = await sshExec(vm2.ssh_port as number, "cat /home/user/testfile.txt");
 			expect(content.trim()).toBe(testContent);
 		},
 		{ timeout: 150000 },

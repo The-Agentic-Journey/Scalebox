@@ -262,7 +262,7 @@ create_rootfs() {
   mkdir -p "$rootfs_dir" "$mount_dir"
 
   # Debootstrap minimal Debian
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales \
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs

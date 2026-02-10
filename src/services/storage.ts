@@ -42,7 +42,8 @@ export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Pr
 		await $`rm -f ${tempKeyFile}`;
 
 		// Ensure proper ownership for the .ssh directory and its contents
-		await $`sudo chown -R user:user ${sshDir}`;
+		// Use numeric UID/GID because 'user' only exists inside the rootfs, not on the host
+		await $`sudo chown -R 1000:1000 ${sshDir}`;
 	} finally {
 		try {
 			await $`sudo umount ${mountPoint}`;

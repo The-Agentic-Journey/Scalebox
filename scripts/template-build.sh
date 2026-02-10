@@ -95,7 +95,7 @@ build_debian_base() {
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT
 
   # Run debootstrap with all required packages
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales \
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs
