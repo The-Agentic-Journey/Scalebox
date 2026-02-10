@@ -453,13 +453,41 @@ install_binary() {
   fi
 }
 
-# === Install Update Script ===
-install_update_script() {
-  if [[ -f "$INSTALL_DIR/scalebox-update" ]]; then
-    log "Installing scalebox-update..."
-    cp "$INSTALL_DIR/scalebox-update" /usr/local/bin/scalebox-update
-    chmod +x /usr/local/bin/scalebox-update
-  fi
+# === Install Scripts from Manifest ===
+install_from_manifest() {
+  local src_dir=$1
+  local manifest="$src_dir/INSTALL_MANIFEST"
+
+  [[ -f "$manifest" ]] || return 0  # No manifest = fresh install, skip
+
+  while read -r entry; do
+    [[ -z "$entry" || "$entry" == \#* ]] && continue
+
+    local type="${entry%%:*}"
+    local name="${entry#*:}"
+    [[ -f "$src_dir/$name" ]] || continue
+
+    case "$type" in
+      bin)
+        log "Installing $name..."
+        cp "$src_dir/$name" "/usr/local/bin/${name}.new"
+        chmod +x "/usr/local/bin/${name}.new"
+        mv "/usr/local/bin/${name}.new" "/usr/local/bin/$name"
+        ;;
+      lib)
+        log "Installing $name library..."
+        mkdir -p /usr/local/lib/scalebox
+        cp "$src_dir/$name" "/usr/local/lib/scalebox/${name}.new"
+        chmod 644 "/usr/local/lib/scalebox/${name}.new"
+        mv "/usr/local/lib/scalebox/${name}.new" "/usr/local/lib/scalebox/$name"
+        ;;
+      # service files handled by install_service()
+    esac
+  done < "$manifest"
+}
+
+install_scripts() {
+  install_from_manifest "$INSTALL_DIR"
 }
 
 # === Install Systemd Service ===
@@ -551,7 +579,7 @@ main() {
   setup_network
   create_rootfs
   install_binary
-  install_update_script
+  install_scripts
   install_service
   start_service
   install_caddy
