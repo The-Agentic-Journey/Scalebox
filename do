@@ -588,6 +588,12 @@ do_check_update() {
     --project="$GCLOUD_PROJECT" \
     --command="sudo SCALEBOX_RELEASE_URL='$update_url' scalebox-update"
 
+  echo "==> Rebuilding template for updated version..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo scalebox-rebuild-template"
+
   echo "==> Verifying update succeeded..."
   gcloud compute ssh "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
