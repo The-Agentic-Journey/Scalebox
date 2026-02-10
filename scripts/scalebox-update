@@ -21,6 +21,8 @@ install_from_manifest() {
   local src_dir=$1
   local manifest="$src_dir/INSTALL_MANIFEST"
 
+  [[ -f "$manifest" ]] || return 0  # No manifest = old release, skip
+
   while read -r entry; do
     [[ -z "$entry" || "$entry" == \#* ]] && continue
 
