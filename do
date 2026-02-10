@@ -321,6 +321,38 @@ check_gcloud_project() {
   echo "==> Using GCP project: $GCLOUD_PROJECT"
 }
 
+check_manifest() {
+  local manifest="scripts/INSTALL_MANIFEST"
+  local errors=0
+
+  echo "==> Checking INSTALL_MANIFEST..."
+
+  # Check all scalebox-* scripts are in manifest
+  for script in scripts/scalebox-*; do
+    [[ -f "$script" ]] || continue
+    name=$(basename "$script")
+    if ! grep -q "^bin:$name$" "$manifest"; then
+      echo "ERROR: $name missing from INSTALL_MANIFEST"
+      errors=1
+    fi
+  done
+
+  # Check all manifest entries exist
+  while read -r entry; do
+    [[ -z "$entry" || "$entry" == \#* ]] && continue
+    name="${entry#*:}"
+    if [[ ! -f "scripts/$name" ]]; then
+      echo "ERROR: $name in manifest but not in scripts/"
+      errors=1
+    fi
+  done < "$manifest"
+
+  if [[ $errors -eq 0 ]]; then
+    echo "==> INSTALL_MANIFEST OK"
+  fi
+  return $errors
+}
+
 check_firewall_rule() {
   echo "==> Checking firewall rule..."
 
@@ -395,6 +427,9 @@ do_check() {
 
   # Verify firewall rule exists before creating VM
   check_firewall_rule
+
+  # Validate install manifest
+  check_manifest
 
   echo "==> Linting..."
   do_lint
