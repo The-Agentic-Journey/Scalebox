@@ -17,6 +17,42 @@ HEALTH_DELAY=2
 log() { echo "[scalebox-update] $1"; }
 die() { echo "[scalebox-update] ERROR: $1" >&2; exit 1; }
 
+install_from_manifest() {
+  local src_dir=$1
+  local manifest="$src_dir/INSTALL_MANIFEST"
+
+  while read -r entry; do
+    [[ -z "$entry" || "$entry" == \#* ]] && continue
+
+    local type="${entry%%:*}"
+    local name="${entry#*:}"
+    [[ -f "$src_dir/$name" ]] || continue
+
+    case "$type" in
+      bin)
+        log "Installing $name..."
+        cp "$src_dir/$name" "/usr/local/bin/${name}.new"
+        chmod +x "/usr/local/bin/${name}.new"
+        mv "/usr/local/bin/${name}.new" "/usr/local/bin/$name"
+        ;;
+      lib)
+        log "Installing $name library..."
+        mkdir -p /usr/local/lib/scalebox
+        cp "$src_dir/$name" "/usr/local/lib/scalebox/${name}.new"
+        chmod 644 "/usr/local/lib/scalebox/${name}.new"
+        mv "/usr/local/lib/scalebox/${name}.new" "/usr/local/lib/scalebox/$name"
+        ;;
+      service)
+        if ! diff -q "$src_dir/$name" "/etc/systemd/system/$name" &>/dev/null; then
+          log "Installing $name..."
+          cp "$src_dir/$name" "/etc/systemd/system/$name"
+          systemctl daemon-reload
+        fi
+        ;;
+    esac
+  done < "$manifest"
+}
+
 check_root() {
   [[ $EUID -eq 0 ]] || die "Must run as root. Try: sudo scalebox-update"
 }
@@ -74,45 +110,7 @@ install_new() {
   cp "$temp_dir/scaleboxd" "$SCALEBOXD_BIN"
   chmod +x "$SCALEBOXD_BIN"
 
-  # Update scalebox-update itself (use atomic mv to avoid corrupting running script)
-  if [[ -f "$temp_dir/scalebox-update" ]]; then
-    log "Installing new scalebox-update..."
-    cp "$temp_dir/scalebox-update" "/usr/local/bin/scalebox-update.new"
-    chmod +x "/usr/local/bin/scalebox-update.new"
-    mv "/usr/local/bin/scalebox-update.new" "/usr/local/bin/scalebox-update"
-  fi
-
-  # Install rebuild command
-  if [[ -f "$temp_dir/scalebox-rebuild-template" ]]; then
-    log "Installing scalebox-rebuild-template..."
-    cp "$temp_dir/scalebox-rebuild-template" "/usr/local/bin/scalebox-rebuild-template.new"
-    chmod +x "/usr/local/bin/scalebox-rebuild-template.new"
-    mv "/usr/local/bin/scalebox-rebuild-template.new" "/usr/local/bin/scalebox-rebuild-template"
-  fi
-
-  # Install resize storage command
-  if [[ -f "$temp_dir/scalebox-resize-storage" ]]; then
-    log "Installing scalebox-resize-storage..."
-    cp "$temp_dir/scalebox-resize-storage" "/usr/local/bin/scalebox-resize-storage.new"
-    chmod +x "/usr/local/bin/scalebox-resize-storage.new"
-    mv "/usr/local/bin/scalebox-resize-storage.new" "/usr/local/bin/scalebox-resize-storage"
-  fi
-
-  # Install shared template build library
-  if [[ -f "$temp_dir/template-build.sh" ]]; then
-    log "Installing template-build.sh library..."
-    mkdir -p /usr/local/lib/scalebox
-    cp "$temp_dir/template-build.sh" "/usr/local/lib/scalebox/template-build.sh.new"
-    chmod 644 "/usr/local/lib/scalebox/template-build.sh.new"
-    mv "/usr/local/lib/scalebox/template-build.sh.new" "/usr/local/lib/scalebox/template-build.sh"
-  fi
-
-  # Only update service file if different
-  if ! diff -q "$temp_dir/scaleboxd.service" "$SERVICE_FILE" &>/dev/null; then
-    log "Updating systemd service file..."
-    cp "$temp_dir/scaleboxd.service" "$SERVICE_FILE"
-    systemctl daemon-reload
-  fi
+  install_from_manifest "$temp_dir"
 }
 
 stop_service() {
