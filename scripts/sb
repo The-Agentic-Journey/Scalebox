@@ -595,6 +595,55 @@ cmd_template_delete() {
   fi
 }
 
+cmd_go() {
+  need_config
+  local template="" key="" key_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--template) template="$2"; shift 2 ;;
+      -k|--key)
+        if [[ "$2" == @* ]]; then
+          # @filepath syntax - read from file
+          key_file="${2:1}"
+          # Expand tilde if HOME is set (bash doesn't expand ~ inside quotes)
+          if [[ -n "${HOME:-}" ]]; then
+            key_file="${key_file/#\~/$HOME}"
+          fi
+          [[ -f "$key_file" ]] || die "Key file not found: $key_file"
+          key=$(cat "$key_file")
+        else
+          key="$2"
+        fi
+        shift 2
+        ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -n "$template" ]] || die "Template required: -t TEMPLATE"
+
+  # Use managed key if none provided
+  if [[ -z "$key" ]]; then
+    key=$(get_ssh_pubkey)
+  fi
+
+  local response
+  if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
+    local name
+    name=$(echo "$response" | jq -r '.name')
+
+    echo "Created VM: $name"
+    echo ""
+
+    # Connect to the newly created VM
+    cmd_connect "$name"
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
 cmd_version() {
   echo "sb version 0.2.0"
 }
@@ -621,6 +670,8 @@ Commands:
   vm snapshot <name|id> -n NAME Snapshot VM to template
   vm wait <name|id> --ssh       Wait for SSH to be ready
 
+  go -t TEMPLATE [-k KEY]       Create VM and connect immediately
+
   connect <name|id> [options]   Connect to VM via mosh (or SSH with --ssh)
     Options:
       --ssh                     Force SSH instead of mosh
@@ -643,6 +694,7 @@ Environment Variables:
 
 Examples:
   sb login
+  sb go -t debian-base
   sb vm create -t debian-base
   sb vm list
   sb connect my-vm-name
@@ -700,6 +752,7 @@ main() {
       esac
       ;;
     connect) shift; cmd_connect "$@" ;;
+    go) shift; cmd_go "$@" ;;
     template)
       case "${2:-}" in
         list) cmd_template_list ;;
