@@ -28,8 +28,8 @@ export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Pr
 	try {
 		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
 
-		// Ensure /root/.ssh directory exists and write the key
-		const sshDir = `${mountPoint}/root/.ssh`;
+		// Ensure /home/user/.ssh directory exists and write the key
+		const sshDir = `${mountPoint}/home/user/.ssh`;
 		await $`sudo mkdir -p ${sshDir}`;
 		await $`sudo chmod 700 ${sshDir}`;
 
@@ -40,6 +40,9 @@ export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Pr
 		await $`sudo cp ${tempKeyFile} ${authorizedKeysPath}`;
 		await $`sudo chmod 600 ${authorizedKeysPath}`;
 		await $`rm -f ${tempKeyFile}`;
+
+		// Ensure proper ownership for the .ssh directory and its contents
+		await $`sudo chown -R user:user ${sshDir}`;
 	} finally {
 		try {
 			await $`sudo umount ${mountPoint}`;
@@ -85,10 +88,16 @@ export async function clearAuthorizedKeys(rootfsPath: string): Promise<void> {
 	try {
 		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
 
-		// Clear authorized_keys file if it exists
-		const authorizedKeysPath = `${mountPoint}/root/.ssh/authorized_keys`;
+		// Clear authorized_keys file if it exists (check both user and root locations)
+		const userAuthorizedKeysPath = `${mountPoint}/home/user/.ssh/authorized_keys`;
+		const rootAuthorizedKeysPath = `${mountPoint}/root/.ssh/authorized_keys`;
 		try {
-			await $`sudo truncate -s 0 ${authorizedKeysPath}`.quiet();
+			await $`sudo truncate -s 0 ${userAuthorizedKeysPath}`.quiet();
+		} catch {
+			// File might not exist, which is fine
+		}
+		try {
+			await $`sudo truncate -s 0 ${rootAuthorizedKeysPath}`.quiet();
 		} catch {
 			// File might not exist, which is fine
 		}

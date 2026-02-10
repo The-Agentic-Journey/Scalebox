@@ -460,7 +460,7 @@ cmd_connect() {
   local id="${1:-}"
   shift || true
 
-  local user="root"
+  local user="user"
   local identity=""
   local use_ssh=false
   local ssh_opts=()
@@ -592,7 +592,7 @@ Commands:
   connect <name|id> [options]   Connect to VM via mosh (or SSH with --ssh)
     Options:
       --ssh                     Force SSH instead of mosh
-      -l, --user USER           Connect as USER (default: root)
+      -l, --user USER           Connect as USER (default: user)
       -i, --identity FILE       Use specific SSH key
       --                        Pass remaining args to SSH
 

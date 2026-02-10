@@ -215,7 +215,7 @@ export function vmToResponse(vm: VM): VMResponse {
 		template: vm.template,
 		ip: vm.ip,
 		ssh_port: vm.port,
-		ssh: `ssh -p ${vm.port} root@${host}`,
+		ssh: `ssh -p ${vm.port} user@${host}`,
 		url,
 		status: "running",
 		created_at: vm.createdAt.toISOString(),
