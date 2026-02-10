@@ -368,7 +368,27 @@ cmd_vm_create() {
 
   local response
   if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
-    echo "$response" | output_single
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      echo "$response" | jq -c .
+    else
+      # Pretty-print VM creation with actionable commands
+      local name ssh_port url
+      name=$(echo "$response" | jq -r '.name')
+      ssh_port=$(echo "$response" | jq -r '.ssh_port')
+      url=$(echo "$response" | jq -r '.url // empty')
+
+      local ssh_host
+      ssh_host=$(get_ssh_host)
+
+      echo ""
+      echo "Created VM: $name"
+      echo ""
+      echo "Connect: sb connect $name"
+      echo "SSH:     ssh -p $ssh_port user@$ssh_host"
+      if [[ -n "$url" ]]; then
+        echo "URL:     $url"
+      fi
+    fi
   else
     echo "$response"
     return 1
