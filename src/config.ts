@@ -17,4 +17,6 @@ export const config = {
 	// When set, VMs are accessible at https://{vm-name}.{vmDomain}
 	vmDomain: process.env.VM_DOMAIN || "",
 	acmeStaging: process.env.ACME_STAGING === "true",
+	// Host IP for external access (auto-detected if not set)
+	hostIp: process.env.HOST_IP || "",
 };

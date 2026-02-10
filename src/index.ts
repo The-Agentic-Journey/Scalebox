@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
+import { getCpuUsage, getHostIp, getMemoryStats, getStorageStats } from "./services/system";
 import { deleteTemplate, listTemplates } from "./services/template";
 import { cleanupOrphanedUdpRules } from "./services/udpProxy";
 import {
@@ -18,6 +19,38 @@ const app = new Hono();
 
 // Health check (no auth required)
 app.get("/health", (c) => c.json({ status: "ok" }));
+
+// System info endpoint (no auth required for basic status)
+app.get("/info", async (c) => {
+	const templates = await listTemplates();
+	const vmList = Array.from(vms.values());
+
+	// Get system stats
+	const storageStats = await getStorageStats();
+	const memoryStats = await getMemoryStats();
+	const cpuUsage = await getCpuUsage();
+
+	// Get host IP (from config or auto-detect)
+	const hostIp = config.hostIp || (await getHostIp());
+
+	return c.json({
+		host_ip: hostIp,
+		api_domain: config.apiDomain,
+		vm_domain: config.vmDomain,
+		templates_count: templates.length,
+		vms_count: vmList.length,
+		storage: {
+			total_gb: storageStats.totalGb,
+			used_gb: storageStats.usedGb,
+			free_gb: storageStats.freeGb,
+		},
+		memory: {
+			total_gb: memoryStats.totalGb,
+			free_gb: memoryStats.freeGb,
+		},
+		cpu_percent: cpuUsage,
+	});
+});
 
 // Caddy on-demand TLS validation (no auth required)
 app.get("/caddy/check", (c) => {
