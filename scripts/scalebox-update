@@ -90,6 +90,14 @@ install_new() {
     mv "/usr/local/bin/scalebox-rebuild-template.new" "/usr/local/bin/scalebox-rebuild-template"
   fi
 
+  # Install resize storage command
+  if [[ -f "$temp_dir/scalebox-resize-storage" ]]; then
+    log "Installing scalebox-resize-storage..."
+    cp "$temp_dir/scalebox-resize-storage" "/usr/local/bin/scalebox-resize-storage.new"
+    chmod +x "/usr/local/bin/scalebox-resize-storage.new"
+    mv "/usr/local/bin/scalebox-resize-storage.new" "/usr/local/bin/scalebox-resize-storage"
+  fi
+
   # Install shared template build library
   if [[ -f "$temp_dir/template-build.sh" ]]; then
     log "Installing template-build.sh library..."
