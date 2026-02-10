@@ -20,7 +20,7 @@ ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-TEMPLATE_VERSION=3
+TEMPLATE_VERSION=4
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -287,6 +287,11 @@ grep -q "^ListenAddress" /etc/ssh/sshd_config || echo "ListenAddress 0.0.0.0" >>
 
 # Generate host keys
 ssh-keygen -A
+
+# Create user with passwordless sudo
+useradd -m -s /bin/bash user
+echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user
+chmod 440 /etc/sudoers.d/user
 
 # Enable services - explicitly disable ssh.socket to avoid socket activation issues
 # Socket activation can cause SSH to not respond if sshd spawn is delayed

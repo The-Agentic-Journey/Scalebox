@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=3
+TEMPLATE_VERSION=4
 
 # Cleanup function for build directories
 cleanup_build() {
@@ -43,6 +43,11 @@ grep -q "^ListenAddress" /etc/ssh/sshd_config || echo "ListenAddress 0.0.0.0" >>
 
 # Generate host keys
 ssh-keygen -A
+
+# Create user with passwordless sudo
+useradd -m -s /bin/bash user
+echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user
+chmod 440 /etc/sudoers.d/user
 
 # Enable services - explicitly disable ssh.socket to avoid socket activation issues
 # Socket activation can cause SSH to not respond if sshd spawn is delayed
