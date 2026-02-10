@@ -150,10 +150,15 @@ JSON_OUTPUT="${SCALEBOX_JSON:-false}"
 
 output_table() {
   local jq_filter="$1"
+  local header="${2:-}"
   if [[ "$JSON_OUTPUT" == "true" ]]; then
     jq .
   else
-    jq -r "$jq_filter" | column -t 2>/dev/null || cat
+    if [[ -n "$header" ]]; then
+      { echo -e "$header"; jq -r "$jq_filter"; } | column -t 2>/dev/null || cat
+    else
+      jq -r "$jq_filter" | column -t 2>/dev/null || cat
+    fi
   fi
 }
 
@@ -309,7 +314,7 @@ cmd_vm_list() {
   local response
   if response=$(api GET /vms); then
     # Note: adds .name column (not in old scalebox CLI which showed: id, template, ip, ssh_port)
-    echo "$response" | output_table '.vms[] | [.name, .id, .template, .ip, .ssh_port] | @tsv'
+    echo "$response" | output_table '.vms[] | [.name, .id, .template, .ip, .ssh_port] | @tsv' $'NAME\tID\tTEMPLATE\tIP\tPORT'
   else
     echo "$response"
     return 1
@@ -537,7 +542,7 @@ cmd_template_list() {
   need_config
   local response
   if response=$(api GET /templates); then
-    echo "$response" | output_table '.templates[] | [.name, .size_bytes] | @tsv'
+    echo "$response" | output_table '.templates[] | [.name, ((.size_bytes / 1073741824 * 10 | floor) / 10 | tostring + " GB")] | @tsv' $'NAME\tSIZE'
   else
     echo "$response"
     return 1
