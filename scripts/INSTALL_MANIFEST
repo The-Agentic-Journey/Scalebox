@@ -1,0 +1,23 @@
+# Scalebox Install Manifest
+#
+# This file lists all components that should be deployed to a Scalebox server.
+# Used by install.sh and scalebox-update to ensure consistent installation.
+#
+# Format: type:filename
+#   bin:     -> /usr/local/bin/ (executables)
+#   lib:     -> /usr/local/lib/scalebox/ (libraries/scripts)
+#   service: -> /etc/systemd/system/ (systemd units)
+#
+# Note: The main 'scalebox' binary (daemon) is built separately and installed
+# by both install.sh and scalebox-update, not listed here.
+
+# Executables
+bin:scalebox-update
+bin:scalebox-rebuild-template
+bin:scalebox-resize-storage
+
+# Libraries
+lib:template-build.sh
+
+# Systemd services
+service:scaleboxd.service
