@@ -295,17 +295,29 @@ cmd_config_show() {
 }
 
 cmd_status() {
+  need_config
   local response
-  local insecure_flag=""
-  [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
-  if response=$(curl $insecure_flag -sf "${SCALEBOX_HOST:-http://localhost:8080}/health" 2>/dev/null); then
+  if response=$(api GET /info); then
     if [[ "$JSON_OUTPUT" == "true" ]]; then
       echo "$response" | jq -c '. + {status: 200}'
     else
-      echo "$response" | jq .
+      echo "Scalebox Status"
+      echo "==============="
+      echo ""
+      echo "Host: $(echo "$response" | jq -r '.host_ip')"
+      echo "API:  $(echo "$response" | jq -r '.api_domain // "N/A"')"
+      echo ""
+      echo "Resources:"
+      echo "  Templates: $(echo "$response" | jq -r '.templates_count')"
+      echo "  VMs:       $(echo "$response" | jq -r '.vms_count')"
+      echo ""
+      echo "Storage: $(echo "$response" | jq -r '.storage.free_gb')GB free / $(echo "$response" | jq -r '.storage.total_gb')GB"
+      echo "Memory:  $(echo "$response" | jq -r '.memory.free_gb')GB free / $(echo "$response" | jq -r '.memory.total_gb')GB"
+      echo "CPU:     $(echo "$response" | jq -r '.cpu_percent')% used"
     fi
   else
-    output_error "Cannot connect to ${SCALEBOX_HOST:-http://localhost:8080}" 0
+    echo "$response"
+    return 1
   fi
 }
 
