@@ -335,11 +335,14 @@ cmd_vm_list() {
 
 cmd_vm_create() {
   need_config
-  local template="" key="" key_file=""
+  local template="debian-base" key="" key_file=""
+  local disk="" mem=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -t|--template) template="$2"; shift 2 ;;
+      -d|--disk) disk="$2"; shift 2 ;;
+      -m|--mem) mem="$2"; shift 2 ;;
       -k|--key)
         if [[ "$2" == @* ]]; then
           # @filepath syntax - read from file
@@ -359,15 +362,23 @@ cmd_vm_create() {
     esac
   done
 
-  [[ -n "$template" ]] || die "Template required: -t TEMPLATE"
-
   # Use managed key if none provided
   if [[ -z "$key" ]]; then
     key=$(get_ssh_pubkey)
   fi
 
+  # Build JSON body with optional disk/mem fields
+  local json_body
+  json_body=$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')
+  if [[ -n "$disk" ]]; then
+    json_body=$(echo "$json_body" | jq --argjson d "$disk" '. + {disk_size_gib: $d}')
+  fi
+  if [[ -n "$mem" ]]; then
+    json_body=$(echo "$json_body" | jq --argjson m "$mem" '. + {mem_size_mib: $m}')
+  fi
+
   local response
-  if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
+  if response=$(api POST /vms -d "$json_body"); then
     if [[ "$JSON_OUTPUT" == "true" ]]; then
       echo "$response" | jq -c .
     else
@@ -597,11 +608,14 @@ cmd_template_delete() {
 
 cmd_go() {
   need_config
-  local template="" key="" key_file=""
+  local template="debian-base" key="" key_file=""
+  local disk="" mem=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -t|--template) template="$2"; shift 2 ;;
+      -d|--disk) disk="$2"; shift 2 ;;
+      -m|--mem) mem="$2"; shift 2 ;;
       -k|--key)
         if [[ "$2" == @* ]]; then
           # @filepath syntax - read from file
@@ -621,15 +635,23 @@ cmd_go() {
     esac
   done
 
-  [[ -n "$template" ]] || die "Template required: -t TEMPLATE"
-
   # Use managed key if none provided
   if [[ -z "$key" ]]; then
     key=$(get_ssh_pubkey)
   fi
 
+  # Build JSON body with optional disk/mem fields
+  local json_body
+  json_body=$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')
+  if [[ -n "$disk" ]]; then
+    json_body=$(echo "$json_body" | jq --argjson d "$disk" '. + {disk_size_gib: $d}')
+  fi
+  if [[ -n "$mem" ]]; then
+    json_body=$(echo "$json_body" | jq --argjson m "$mem" '. + {mem_size_mib: $m}')
+  fi
+
   local response
-  if response=$(api POST /vms -d "$(jq -n --arg t "$template" --arg k "$key" '{template:$t,ssh_public_key:$k}')"); then
+  if response=$(api POST /vms -d "$json_body"); then
     local name
     name=$(echo "$response" | jq -r '.name')
 
@@ -664,13 +686,16 @@ Commands:
   status                        Health check (no auth required)
 
   vm list                       List VMs
-  vm create -t TPL [-k KEY]     Create VM (uses managed key if -k omitted)
+  vm create [-t TPL] [-k KEY] [-d DISK] [-m MEM]
+                                Create VM (template defaults to debian-base)
   vm get <name|id>              Get VM details
   vm delete <name|id>           Delete VM
   vm snapshot <name|id> -n NAME Snapshot VM to template
   vm wait <name|id> --ssh       Wait for SSH to be ready
 
-  go -t TEMPLATE [-k KEY]       Create VM and connect immediately
+  go [-t TPL] [-k KEY] [-d DISK] [-m MEM]
+                                Create VM and connect immediately
+                                (template defaults to debian-base)
 
   connect <name|id> [options]   Connect to VM via mosh (or SSH with --ssh)
     Options:
@@ -694,8 +719,10 @@ Environment Variables:
 
 Examples:
   sb login
-  sb go -t debian-base
-  sb vm create -t debian-base
+  sb go                           # Uses debian-base template by default
+  sb go -d 20 -m 2048             # Custom disk (20GB) and memory (2048MB)
+  sb vm create                    # Uses debian-base template by default
+  sb vm create -t custom-template # Use a specific template
   sb vm list
   sb connect my-vm-name
   sb connect my-vm-name --ssh
