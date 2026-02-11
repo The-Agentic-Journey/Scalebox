@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { config } from "../config";
 import type { CreateVMRequest, SnapshotResponse, VM, VMResponse } from "../types";
@@ -14,6 +14,8 @@ import { generateUniqueName } from "./nameGenerator";
 import {
 	allocateIp,
 	allocatePort,
+	allocateSpecificIp,
+	allocateSpecificPort,
 	createTapDevice,
 	deleteTapDevice,
 	releaseIp,
@@ -34,6 +36,120 @@ import { startUdpProxy, stopUdpProxy } from "./udpProxy";
 
 // In-memory VM state
 export const vms = new Map<string, VM>();
+
+// State persistence
+const STATE_FILE = `${config.dataDir}/vms/state.json`;
+
+interface PersistedVM {
+	id: string;
+	name: string;
+	templateName: string;
+	ip: string;
+	tapDevice: string;
+	sshPort: number;
+	pid: number;
+	socketPath: string;
+	rootfsPath: string;
+	createdAt: string;
+}
+
+export function saveState(): void {
+	const state = Array.from(vms.values()).map((vm) => ({
+		id: vm.id,
+		name: vm.name || "",
+		templateName: vm.template,
+		ip: vm.ip,
+		tapDevice: vm.tapDevice,
+		sshPort: vm.port,
+		pid: vm.pid,
+		socketPath: vm.socketPath,
+		rootfsPath: vm.rootfsPath,
+		createdAt: vm.createdAt.toISOString(),
+	}));
+	writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function processExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0); // Signal 0 = check existence
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function cleanupDeadVm(saved: PersistedVM): Promise<void> {
+	console.log(`[${saved.id}] Cleaning up dead VM resources...`);
+
+	// Clean up TAP device
+	try {
+		await deleteTapDevice(saved.tapDevice);
+	} catch {}
+
+	// Clean up rootfs
+	try {
+		await deleteRootfs(saved.rootfsPath);
+	} catch {}
+}
+
+export async function recoverVms(): Promise<void> {
+	if (!existsSync(STATE_FILE)) {
+		console.log("[recovery] No state file found, starting fresh");
+		return;
+	}
+
+	console.log("[recovery] Loading VM state from disk...");
+	const state: PersistedVM[] = JSON.parse(readFileSync(STATE_FILE, "utf-8"));
+
+	for (const saved of state) {
+		const isRunning = processExists(saved.pid);
+
+		if (isRunning) {
+			console.log(`[recovery] Reconnecting to running VM ${saved.id} (${saved.name})`);
+
+			// Re-register resource allocations
+			allocateSpecificPort(saved.sshPort);
+			allocateSpecificIp(saved.ip);
+
+			// Restart TCP proxy for this VM
+			try {
+				await startProxy(saved.id, saved.sshPort, saved.ip, 22);
+				console.log(`[recovery] TCP proxy started for ${saved.id}`);
+			} catch (err) {
+				console.error(`[recovery] Failed to start TCP proxy for ${saved.id}:`, err);
+			}
+
+			// Restart UDP proxy for mosh
+			try {
+				await startUdpProxy(saved.id, saved.sshPort, saved.ip, saved.sshPort);
+				console.log(`[recovery] UDP proxy started for ${saved.id}`);
+			} catch (err) {
+				console.error(`[recovery] Failed to start UDP proxy for ${saved.id}:`, err);
+			}
+
+			// Reconstruct VM object and add to map
+			vms.set(saved.id, {
+				id: saved.id,
+				name: saved.name,
+				template: saved.templateName,
+				ip: saved.ip,
+				port: saved.sshPort,
+				pid: saved.pid,
+				socketPath: saved.socketPath,
+				rootfsPath: saved.rootfsPath,
+				tapDevice: saved.tapDevice,
+				createdAt: new Date(saved.createdAt),
+			});
+		} else {
+			console.log(`[recovery] VM ${saved.id} (${saved.name}) process died, cleaning up`);
+			await cleanupDeadVm(saved);
+		}
+	}
+
+	// Save state after recovery to remove dead VMs
+	saveState();
+	console.log(`[recovery] Recovered ${vms.size} VMs`);
+}
 
 export function findVm(idOrName: string): VM | undefined {
 	// First try direct ID lookup (fast path)
@@ -150,6 +266,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		};
 
 		vms.set(vmId, vm);
+		saveState();
 		console.log(`[${vmId}] VM created successfully`);
 		return vm;
 	} catch (e) {
@@ -204,6 +321,7 @@ export async function deleteVm(vm: VM): Promise<void> {
 
 	// Remove from state
 	vms.delete(vm.id);
+	saveState();
 }
 
 export function vmToResponse(vm: VM): VMResponse {

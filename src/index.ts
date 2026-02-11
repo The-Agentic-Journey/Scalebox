@@ -9,6 +9,8 @@ import {
 	createVm,
 	deleteVm,
 	findVm,
+	recoverVms,
+	saveState,
 	snapshotVm,
 	vmToResponse,
 	vms,
@@ -162,9 +164,19 @@ const host = "0.0.0.0";
 // Clean up orphaned UDP proxy rules from previous runs
 await cleanupOrphanedUdpRules();
 
+// Recover VMs from previous run
+await recoverVms();
+
 // Initialize Caddy config on startup to ensure vms.caddy matches current VM state
 updateCaddyConfig().then(() => {
 	console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
+});
+
+// Add SIGTERM handler for graceful shutdown
+process.on("SIGTERM", () => {
+	console.log("Received SIGTERM, saving state...");
+	saveState();
+	process.exit(0);
 });
 
 export default { port: config.apiPort, hostname: host, fetch: app.fetch };

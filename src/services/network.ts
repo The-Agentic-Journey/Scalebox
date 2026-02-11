@@ -35,6 +35,24 @@ export function releasePort(port: number): void {
 	allocatedPorts.delete(port);
 }
 
+export function allocateSpecificPort(port: number): void {
+	allocatedPorts.add(port);
+}
+
+export function allocateSpecificIp(ip: string): void {
+	// Mark IP as in use by extracting the last two octets
+	// IP format: 172.16.{high}.{low}
+	const parts = ip.split(".");
+	const high = Number.parseInt(parts[2]);
+	const low = Number.parseInt(parts[3]);
+	const counter = high * 256 + low;
+	allocatedIps.add(ip);
+	// Update nextIpCounter if this IP is >= current counter
+	if (counter >= nextIpCounter) {
+		nextIpCounter = counter + 1;
+	}
+}
+
 export async function createTapDevice(tapName: string): Promise<void> {
 	await $`sudo ip tuntap add ${tapName} mode tap user $(whoami)`;
 	await $`sudo ip link set ${tapName} master br0`;
