@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=4
+TEMPLATE_VERSION=5
 
 # Cleanup function for build directories
 cleanup_build() {
@@ -55,6 +55,9 @@ systemctl disable ssh.socket 2>/dev/null || true
 systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
+
+# Install Claude Code CLI
+curl -fsSL https://claude.ai/install.sh | bash
 CHROOT
 }
 
@@ -95,7 +98,7 @@ build_debian_base() {
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT
 
   # Run debootstrap with all required packages
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo \
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo,curl,wget,vim,nodejs,npm,python3,python3-pip,python3-venv \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs
