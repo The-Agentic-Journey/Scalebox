@@ -498,6 +498,64 @@ cmd_vm_wait() {
   output_error "Timeout waiting for SSH on port $ssh_port after ${timeout}s" 1
 }
 
+cmd_run() {
+  need_config
+  local id="${1:-}"
+  shift || true
+
+  local user="user"
+  local identity=""
+  local cmd_args=()
+
+  # Parse options until we hit a non-option (the command to run)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -l|--user) user="$2"; shift 2 ;;
+      -i|--identity)
+        identity="$2"
+        # Expand tilde if HOME is set (bash doesn't expand ~ inside quotes)
+        if [[ -n "${HOME:-}" ]]; then
+          identity="${identity/#\~/$HOME}"
+        fi
+        shift 2
+        ;;
+      -*) die "Unknown option: $1" ;;
+      *) cmd_args+=("$@"); break ;;  # Rest is the command to run
+    esac
+  done
+
+  [[ -n "$id" ]] || die "Usage: sb run <name|id> [-l USER] [-i FILE] <command...>"
+  [[ ${#cmd_args[@]} -gt 0 ]] || die "Usage: sb run <name|id> [-l USER] [-i FILE] <command...>"
+
+  # Use managed key if none provided
+  if [[ -z "$identity" ]]; then
+    identity=$(get_ssh_keyfile)
+  fi
+
+  # Get VM details
+  local vm_data ssh_port
+  vm_data=$(api GET "/vms/$id") || { echo "$vm_data"; return 1; }
+  ssh_port=$(echo "$vm_data" | jq -r '.ssh_port')
+
+  # Extract host from SCALEBOX_HOST
+  local ssh_host
+  ssh_host=$(get_ssh_host)
+
+  # Common SSH options for ephemeral VMs:
+  # - StrictHostKeyChecking=accept-new: Accept new keys, warn on changes
+  # - UserKnownHostsFile=/dev/null: Don't pollute known_hosts with ephemeral VM keys
+  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+
+  # Build identity option
+  local identity_opt=""
+  if [[ -n "$identity" ]]; then
+    identity_opt="-i $identity"
+  fi
+
+  # Execute SSH with the command - use exec so exit code propagates
+  exec ssh -p "$ssh_port" $identity_opt $base_ssh_opts "${user}@${ssh_host}" "${cmd_args[@]}"
+}
+
 cmd_connect() {
   need_config
   local id="${1:-}"
@@ -704,6 +762,12 @@ Commands:
       -i, --identity FILE       Use specific SSH key
       --                        Pass remaining args to SSH
 
+  run <name|id> [options] <command...>
+                                Run a command on VM via SSH
+    Options:
+      -l, --user USER           Connect as USER (default: user)
+      -i, --identity FILE       Use specific SSH key
+
   template list                 List templates
   template delete <name>        Delete template
 
@@ -726,6 +790,8 @@ Examples:
   sb vm list
   sb connect my-vm-name
   sb connect my-vm-name --ssh
+  sb run my-vm-name ls -la
+  sb run my-vm-name -l root whoami
   sb --json vm get my-vm-name
   sb vm wait my-vm-name --ssh --timeout 120
   sb vm snapshot my-vm-name -n my-snapshot
@@ -779,6 +845,7 @@ main() {
       esac
       ;;
     connect) shift; cmd_connect "$@" ;;
+    run) shift; cmd_run "$@" ;;
     go) shift; cmd_go "$@" ;;
     template)
       case "${2:-}" in
