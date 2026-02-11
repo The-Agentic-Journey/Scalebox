@@ -6,7 +6,7 @@ export const config = {
 	portMin: Number(process.env.PORT_MIN) || 22001,
 	portMax: Number(process.env.PORT_MAX) || 32000,
 	defaultVcpuCount: Number(process.env.DEFAULT_VCPU_COUNT) || 2,
-	defaultMemSizeMib: Number(process.env.DEFAULT_MEM_SIZE_MIB) || 512,
+	defaultMemSizeMib: Number(process.env.DEFAULT_MEM_SIZE_MIB) || 2048,
 	defaultDiskSizeGib: Number(process.env.DEFAULT_DISK_SIZE_GIB) || 2,
 	maxDiskSizeGib: Number(process.env.MAX_DISK_SIZE_GIB) || 100,
 	protectedTemplates: ["debian-base"],
