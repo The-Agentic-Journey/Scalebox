@@ -6,8 +6,10 @@
 set -euo pipefail
 
 REPO="The-Agentic-Journey/Scalebox"
-REQUIRED_TEMPLATE_VERSION=4
 DATA_DIR="/var/lib/scalebox"
+
+# Extract required template version from template-build.sh (single source of truth)
+REQUIRED_TEMPLATE_VERSION=$(grep -E '^TEMPLATE_VERSION=' /usr/local/lib/scalebox/template-build.sh | cut -d= -f2)
 SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
 SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
 HEALTH_URL="http://localhost:8080/health"

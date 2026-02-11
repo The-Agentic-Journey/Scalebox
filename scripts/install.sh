@@ -20,7 +20,6 @@ ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-TEMPLATE_VERSION=4
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -255,6 +254,11 @@ create_rootfs() {
   # Fallback: inline template creation for fresh installs
   # This code is duplicated from template-build.sh to ensure install.sh
   # works standalone before the first update installs the library.
+
+  # Source local template-build.sh to get TEMPLATE_VERSION
+  # shellcheck source=/dev/null
+  source "$INSTALL_DIR/template-build.sh"
+
   local rootfs_dir="/tmp/rootfs-$$"
   local mount_dir="/tmp/mount-$$"
   TEMP_DIRS+=("$rootfs_dir" "$mount_dir")
