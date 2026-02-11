@@ -14,35 +14,11 @@ export interface MemoryStats {
 }
 
 /**
- * Get btrfs storage stats for the data directory.
- * Falls back to regular df if btrfs command fails.
+ * Get storage stats for the data directory using df.
+ * Note: btrfs filesystem df shows allocated chunks, not total filesystem size,
+ * so we use standard df which reports accurate total/free space.
  */
 export async function getStorageStats(): Promise<StorageStats> {
-	try {
-		// Try btrfs filesystem df first for more accurate stats on btrfs
-		const result = await $`btrfs filesystem df -b ${config.dataDir}`.text();
-
-		// Parse btrfs output - look for Data line
-		// Format: "Data, single: total=123456789, used=12345678"
-		const dataLine = result.split("\n").find((line) => line.startsWith("Data"));
-		if (dataLine) {
-			const totalMatch = dataLine.match(/total=(\d+)/);
-			const usedMatch = dataLine.match(/used=(\d+)/);
-			if (totalMatch && usedMatch) {
-				const totalBytes = Number.parseInt(totalMatch[1]);
-				const usedBytes = Number.parseInt(usedMatch[1]);
-				return {
-					totalGb: Math.round((totalBytes / 1024 / 1024 / 1024) * 10) / 10,
-					usedGb: Math.round((usedBytes / 1024 / 1024 / 1024) * 10) / 10,
-					freeGb: Math.round(((totalBytes - usedBytes) / 1024 / 1024 / 1024) * 10) / 10,
-				};
-			}
-		}
-	} catch {
-		// Fall through to df fallback
-	}
-
-	// Fallback to standard df
 	const dfResult = await $`df -B1 ${config.dataDir} --output=size,used,avail | tail -1`.text();
 	const parts = dfResult.trim().split(/\s+/);
 	const totalBytes = Number.parseInt(parts[0]);
