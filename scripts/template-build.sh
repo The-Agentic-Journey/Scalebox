@@ -9,10 +9,32 @@
 
 TEMPLATE_VERSION=5
 
+# Set up bind mounts for chroot environment
+setup_chroot_mounts() {
+  local rootfs_dir="$1"
+  mount --bind /dev "$rootfs_dir/dev"
+  mount --bind /dev/pts "$rootfs_dir/dev/pts"
+  mount --bind /proc "$rootfs_dir/proc"
+  mount --bind /sys "$rootfs_dir/sys"
+  # Copy resolv.conf for network access
+  cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf"
+}
+
+# Tear down bind mounts from chroot environment
+teardown_chroot_mounts() {
+  local rootfs_dir="$1"
+  umount "$rootfs_dir/sys" 2>/dev/null || true
+  umount "$rootfs_dir/proc" 2>/dev/null || true
+  umount "$rootfs_dir/dev/pts" 2>/dev/null || true
+  umount "$rootfs_dir/dev" 2>/dev/null || true
+}
+
 # Cleanup function for build directories
 cleanup_build() {
   local rootfs_dir="$1"
   local mount_dir="$2"
+  # Unmount chroot mounts if still mounted
+  teardown_chroot_mounts "$rootfs_dir"
   # Unmount if still mounted
   umount "$mount_dir" 2>/dev/null || true
   rm -rf "$rootfs_dir" "$mount_dir" 2>/dev/null || true
@@ -21,6 +43,9 @@ cleanup_build() {
 # Configure the rootfs with SSH, networking, etc.
 configure_rootfs() {
   local rootfs_dir="$1"
+
+  # Set up bind mounts for chroot environment
+  setup_chroot_mounts "$rootfs_dir"
 
   chroot "$rootfs_dir" /bin/bash <<'CHROOT'
 # Configure locale for mosh
@@ -56,9 +81,15 @@ systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
 
-# Install Claude Code CLI
+# Install Claude Code CLI for root
 curl -fsSL https://claude.ai/install.sh | bash
+
+# Install Claude Code CLI for user
+su - user -c 'curl -fsSL https://claude.ai/install.sh | bash'
 CHROOT
+
+  # Tear down bind mounts after chroot completes
+  teardown_chroot_mounts "$rootfs_dir"
 }
 
 # Create ext4 image from rootfs directory
