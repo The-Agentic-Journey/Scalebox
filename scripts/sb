@@ -544,7 +544,8 @@ cmd_run() {
   # Common SSH options for ephemeral VMs:
   # - StrictHostKeyChecking=accept-new: Accept new keys, warn on changes
   # - UserKnownHostsFile=/dev/null: Don't pollute known_hosts with ephemeral VM keys
-  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+  # - LogLevel=ERROR: Suppress "Permanently added ... to known hosts" warning
+  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
   # Build identity option
   local identity_opt=""
@@ -603,7 +604,8 @@ cmd_connect() {
   # Common SSH options for ephemeral VMs:
   # - StrictHostKeyChecking=accept-new: Accept new keys, warn on changes
   # - UserKnownHostsFile=/dev/null: Don't pollute known_hosts with ephemeral VM keys
-  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+  # - LogLevel=ERROR: Suppress "Permanently added ... to known hosts" warning
+  local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
   if [[ "$use_ssh" == "true" ]]; then
     # Direct SSH connection (fallback if mosh doesn't work)
@@ -627,7 +629,7 @@ cmd_connect() {
     local quoted_identity
     quoted_identity=$(printf '%q' "$identity")
     local ssh_cmd="ssh -p ${ssh_port} -i ${quoted_identity}"
-    ssh_cmd+=" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+    ssh_cmd+=" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
     # Note: ${ssh_opts[@]+...} handles empty array on bash 3.2 (macOS) with set -u
     for opt in ${ssh_opts[@]+"${ssh_opts[@]}"}; do
       ssh_cmd+=" $(printf '%q' "$opt")"
