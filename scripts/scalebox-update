@@ -28,7 +28,7 @@ install_from_manifest() {
 
     local type="${entry%%:*}"
     local name="${entry#*:}"
-    [[ -f "$src_dir/$name" ]] || continue
+    [[ -f "$src_dir/$name" ]] || die "File $name listed in manifest but not found in release"
 
     case "$type" in
       bin)
