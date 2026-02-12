@@ -47,12 +47,6 @@ configure_rootfs() {
   # Set up bind mounts for chroot environment
   setup_chroot_mounts "$rootfs_dir"
 
-  # Install packages that need proper chroot environment (nodejs, npm, python3-pip)
-  # These fail if included in debootstrap because their postinst scripts need /dev, /proc, /sys
-  echo "[template-build] Installing development packages..."
-  chroot "$rootfs_dir" apt-get update
-  chroot "$rootfs_dir" apt-get install -y nodejs npm python3 python3-pip python3-venv
-
   chroot "$rootfs_dir" /bin/bash <<'CHROOT'
 # Configure locale for mosh
 sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
@@ -87,6 +81,12 @@ systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
 CHROOT
+
+  # Install packages that need proper chroot environment (nodejs, npm, python3-pip)
+  # These fail if included in debootstrap because their postinst scripts need /dev, /proc, /sys
+  echo "[template-build] Installing development packages..."
+  chroot "$rootfs_dir" apt-get update
+  chroot "$rootfs_dir" apt-get install -y nodejs npm python3 python3-pip python3-venv
 
   # Create user setup script
   cat > "$rootfs_dir/tmp/setup-user.sh" <<'USERSCRIPT'
@@ -124,8 +124,9 @@ create_ext4_image() {
   local template_path="$3"
 
   # Create ext4 image (use .tmp for atomic creation)
+  # 10G is the default VM size, accommodates nodejs, npm, python3, and Claude Code
   local tmp_path="${template_path}.tmp"
-  truncate -s 2G "$tmp_path"
+  truncate -s 10G "$tmp_path"
   mkfs.ext4 -F "$tmp_path" >/dev/null
 
   mount -o loop "$tmp_path" "$mount_dir"
@@ -144,11 +145,17 @@ build_debian_base() {
   local template_path="$data_dir/templates/debian-base.ext4"
   local version_path="$data_dir/templates/debian-base.version"
 
-  # Create temp directories
+  # Create temp directories in data_dir to avoid /tmp noexec issues
+  # GCP VMs often have /tmp mounted with noexec, which prevents chroot from working
+  local build_dir="$data_dir/build"
+  mkdir -p "$build_dir"
   local rootfs_dir
   local mount_dir
-  rootfs_dir=$(mktemp -d /tmp/rootfs-XXXXXX)
-  mount_dir=$(mktemp -d /tmp/mount-XXXXXX)
+  rootfs_dir=$(mktemp -d "$build_dir/rootfs-XXXXXX")
+  mount_dir=$(mktemp -d "$build_dir/mount-XXXXXX")
+  # mktemp -d creates directories with mode 700, but we need 755 for sudo to work
+  # inside the chroot (sudo validates path accessibility even for chroot operations)
+  chmod 755 "$rootfs_dir" "$mount_dir"
 
   # Set up cleanup trap
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT

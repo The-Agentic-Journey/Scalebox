@@ -228,11 +228,15 @@ EOF
   systemctl enable iptables-restore
 }
 
-# === Create Base Template ===
-# Try to use the shared template-build.sh library if available.
-# Fall back to inline code for fresh installs before the library is installed.
-_TEMPLATE_BUILD_LIB="/usr/local/lib/scalebox/template-build.sh"
+# === Install Template Build Library ===
+install_template_library() {
+  log "Installing template-build.sh library..."
+  mkdir -p /usr/local/lib/scalebox
+  cp "$INSTALL_DIR/template-build.sh" /usr/local/lib/scalebox/
+  chmod 644 /usr/local/lib/scalebox/template-build.sh
+}
 
+# === Create Base Template ===
 create_rootfs() {
   local template_path="$DATA_DIR/templates/debian-base.ext4"
 
@@ -243,88 +247,11 @@ create_rootfs() {
 
   log "Creating Debian base template (this takes a few minutes)..."
 
-  # Use shared library if available (installed by scalebox-update)
-  if [[ -f "$_TEMPLATE_BUILD_LIB" ]]; then
-    # shellcheck source=/dev/null
-    source "$_TEMPLATE_BUILD_LIB"
-    build_debian_base "$DATA_DIR"
-    return
-  fi
-
-  # Fallback: inline template creation for fresh installs
-  # This code is duplicated from template-build.sh to ensure install.sh
-  # works standalone before the first update installs the library.
-
-  # Source local template-build.sh to get TEMPLATE_VERSION
+  # Source template-build.sh from install directory (shipped in tarball)
+  # This ensures install.sh and scalebox-rebuild-template use identical code
   # shellcheck source=/dev/null
   source "$INSTALL_DIR/template-build.sh"
-
-  local rootfs_dir="/tmp/rootfs-$$"
-  local mount_dir="/tmp/mount-$$"
-  TEMP_DIRS+=("$rootfs_dir" "$mount_dir")
-
-  mkdir -p "$rootfs_dir" "$mount_dir"
-
-  # Debootstrap minimal Debian
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo \
-    bookworm "$rootfs_dir" http://deb.debian.org/debian
-
-  # Configure the rootfs
-  chroot "$rootfs_dir" /bin/bash <<'CHROOT'
-# Configure locale for mosh
-sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-locale-gen
-echo 'LANG=en_US.UTF-8' > /etc/default/locale
-
-# Disable root password (key-only auth)
-passwd -d root
-
-# Configure SSH
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-# Explicitly listen on all interfaces
-sed -i 's/^#\?ListenAddress.*/ListenAddress 0.0.0.0/' /etc/ssh/sshd_config
-# Add ListenAddress if not present
-grep -q "^ListenAddress" /etc/ssh/sshd_config || echo "ListenAddress 0.0.0.0" >> /etc/ssh/sshd_config
-
-# Generate host keys
-ssh-keygen -A
-
-# Create user with passwordless sudo
-useradd -m -s /bin/bash user
-echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user
-chmod 440 /etc/sudoers.d/user
-
-# Enable services - explicitly disable ssh.socket to avoid socket activation issues
-# Socket activation can cause SSH to not respond if sshd spawn is delayed
-systemctl disable ssh.socket 2>/dev/null || true
-systemctl enable ssh.service
-systemctl enable haveged.service
-systemctl enable serial-getty@ttyS0.service
-CHROOT
-
-  # Create ext4 image (use .tmp for atomic creation)
-  local tmp_path="${template_path}.tmp"
-  truncate -s 2G "$tmp_path"
-  mkfs.ext4 -F "$tmp_path" >/dev/null
-
-  mount -o loop "$tmp_path" "$mount_dir"
-  cp -a "$rootfs_dir"/* "$mount_dir"/
-  umount "$mount_dir"
-
-  # Atomic rename to final path
-  mv "$tmp_path" "$template_path"
-
-  # Write version file
-  echo "$TEMPLATE_VERSION" > "$DATA_DIR/templates/debian-base.version"
-
-  # Cleanup
-  rm -rf "$rootfs_dir" "$mount_dir"
-  TEMP_DIRS=()
-
-  log "Base template created: $template_path"
+  build_debian_base "$DATA_DIR"
 }
 
 # === Install Caddy (HTTPS reverse proxy) ===
@@ -581,6 +508,7 @@ main() {
   setup_storage
   install_firecracker
   setup_network
+  install_template_library
   create_rootfs
   install_binary
   install_scripts
