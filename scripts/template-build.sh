@@ -80,21 +80,32 @@ systemctl disable ssh.socket 2>/dev/null || true
 systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
-
-# Configure PATH for user to include ~/.local/bin (where Claude installs)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/user/.bashrc
-chown user:user /home/user/.bashrc
 CHROOT
 
-  # Install Claude Code CLI for user
-  # Use runuser instead of su - it works better in chroot without PAM
-  # MUST fail loudly so errors are caught in testing
-  echo "[template-build] Installing Claude Code CLI for user..."
-  if ! chroot "$rootfs_dir" runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
-    echo "[template-build] ERROR: Claude Code CLI installation failed for user"
+  # Create user setup script
+  cat > "$rootfs_dir/tmp/setup-user.sh" <<'USERSCRIPT'
+#!/bin/bash
+set -e
+
+# Configure PATH for ~/.local/bin (where Claude installs)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# Install Claude Code CLI
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Verify installation
+~/.local/bin/claude --version
+USERSCRIPT
+  chmod +x "$rootfs_dir/tmp/setup-user.sh"
+
+  # Run user setup (MUST fail loudly for CI)
+  echo "[template-build] Running user setup script..."
+  if ! chroot "$rootfs_dir" sudo -u user /tmp/setup-user.sh; then
+    echo "[template-build] ERROR: User setup failed"
     exit 1
   fi
-  echo "[template-build] Claude Code CLI installed successfully for user"
+  echo "[template-build] User setup completed successfully"
+  rm -f "$rootfs_dir/tmp/setup-user.sh"
 
   # Tear down bind mounts after chroot completes
   teardown_chroot_mounts "$rootfs_dir"
