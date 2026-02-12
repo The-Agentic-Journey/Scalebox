@@ -50,18 +50,18 @@ runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'
 
 The `-l` flag ensures bash runs as a login shell to set up PATH correctly.
 
-### Phase 3: Add Error Handling and Verification
+### Phase 3: Fail Loudly on Error
 
-Add explicit error checking to catch installation failures:
+The template build must fail immediately if Claude installation fails, so errors are caught in CI/testing:
 
 ```bash
 # Install Claude Code CLI for user
 echo "[template-build] Installing Claude Code CLI for user..."
-if runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
-  echo "[template-build] Claude Code CLI installed successfully for user"
-else
-  echo "[template-build] WARNING: Claude Code CLI installation failed for user"
+if ! runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+  echo "[template-build] ERROR: Claude Code CLI installation failed for user"
+  exit 1
 fi
+echo "[template-build] Claude Code CLI installed successfully for user"
 ```
 
 ## Combined Implementation
@@ -75,12 +75,13 @@ chown user:user /home/user/.bashrc
 
 # Install Claude Code CLI for user
 # Use runuser instead of su - it works better in chroot without PAM
+# MUST fail loudly so errors are caught in testing
 echo "[template-build] Installing Claude Code CLI for user..."
-if runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
-  echo "[template-build] Claude Code CLI installed successfully for user"
-else
-  echo "[template-build] WARNING: Claude Code CLI installation failed for user"
+if ! runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+  echo "[template-build] ERROR: Claude Code CLI installation failed for user"
+  exit 1
 fi
+echo "[template-build] Claude Code CLI installed successfully for user"
 ```
 
 ## Files Summary
