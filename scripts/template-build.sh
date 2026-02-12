@@ -96,11 +96,11 @@ curl -fsSL https://claude.ai/install.sh | bash
 # Verify installation
 ~/.local/bin/claude --version
 USERSCRIPT
-  chmod +x "$rootfs_dir/tmp/setup-user.sh"
 
   # Run user setup (MUST fail loudly for CI)
+  # Use "bash /tmp/setup-user.sh" instead of direct execution to bypass noexec on /tmp
   echo "[template-build] Running user setup script..."
-  if ! chroot "$rootfs_dir" sudo -u user /tmp/setup-user.sh; then
+  if ! chroot "$rootfs_dir" sudo -u user bash /tmp/setup-user.sh; then
     echo "[template-build] ERROR: User setup failed"
     exit 1
   fi
