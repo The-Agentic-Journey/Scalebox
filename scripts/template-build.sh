@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=5
+TEMPLATE_VERSION=6
 
 # Set up bind mounts for chroot environment
 setup_chroot_mounts() {
@@ -81,12 +81,20 @@ systemctl enable ssh.service
 systemctl enable haveged.service
 systemctl enable serial-getty@ttyS0.service
 
-# Install Claude Code CLI for root
-curl -fsSL https://claude.ai/install.sh | bash
-
-# Install Claude Code CLI for user
-su - user -c 'curl -fsSL https://claude.ai/install.sh | bash'
+# Configure PATH for user to include ~/.local/bin (where Claude installs)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/user/.bashrc
+chown user:user /home/user/.bashrc
 CHROOT
+
+  # Install Claude Code CLI for user
+  # Use runuser instead of su - it works better in chroot without PAM
+  # MUST fail loudly so errors are caught in testing
+  echo "[template-build] Installing Claude Code CLI for user..."
+  if ! chroot "$rootfs_dir" runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+    echo "[template-build] ERROR: Claude Code CLI installation failed for user"
+    exit 1
+  fi
+  echo "[template-build] Claude Code CLI installed successfully for user"
 
   # Tear down bind mounts after chroot completes
   teardown_chroot_mounts "$rootfs_dir"
