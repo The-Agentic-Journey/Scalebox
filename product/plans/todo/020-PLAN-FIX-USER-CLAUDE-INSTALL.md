@@ -12,10 +12,24 @@ This likely fails silently inside the chroot environment because:
 1. `su -` (login shell) requires proper PAM session setup which isn't available in chroot
 2. The login shell may fail to initialize properly without `/dev/pts` terminal allocation
 3. Error output may be swallowed, making debugging difficult
+4. `~/.local/bin` is not in the default PATH for new user accounts
 
 ## Solution
 
-### Phase 1: Use runuser Instead of su
+### Phase 1: Configure User PATH
+
+Before installing Claude, ensure `~/.local/bin` is in the user's PATH by adding it to `.bashrc`:
+
+**File: `scripts/template-build.sh`**
+
+Add to the chroot section (before Claude installation):
+```bash
+# Configure PATH for user to include ~/.local/bin (where Claude installs)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/user/.bashrc
+chown user:user /home/user/.bashrc
+```
+
+### Phase 2: Use runuser Instead of su
 
 Replace `su - user` with `runuser` which is designed for non-interactive user switching and doesn't require PAM:
 
@@ -36,49 +50,44 @@ runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'
 
 The `-l` flag ensures bash runs as a login shell to set up PATH correctly.
 
-### Phase 2: Add Error Handling
+### Phase 3: Add Error Handling and Verification
 
 Add explicit error checking to catch installation failures:
 
 ```bash
 # Install Claude Code CLI for user
 echo "[template-build] Installing Claude Code CLI for user..."
-if ! runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+if runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+  echo "[template-build] Claude Code CLI installed successfully for user"
+else
   echo "[template-build] WARNING: Claude Code CLI installation failed for user"
 fi
 ```
 
-### Phase 3: Verify Installation
+## Combined Implementation
 
-Add a verification step after installation:
+The final chroot section should look like:
 
 ```bash
-# Verify Claude installation for user
-if runuser -u user -- bash -l -c 'command -v claude >/dev/null 2>&1'; then
+# Configure PATH for user to include ~/.local/bin (where Claude installs)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/user/.bashrc
+chown user:user /home/user/.bashrc
+
+# Install Claude Code CLI for user
+# Use runuser instead of su - it works better in chroot without PAM
+echo "[template-build] Installing Claude Code CLI for user..."
+if runuser -u user -- bash -l -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
   echo "[template-build] Claude Code CLI installed successfully for user"
 else
-  echo "[template-build] WARNING: Claude Code CLI not found in user PATH"
+  echo "[template-build] WARNING: Claude Code CLI installation failed for user"
 fi
-```
-
-## Alternative Approach (if runuser fails)
-
-If `runuser` doesn't work, manually set up the environment:
-
-```bash
-# Install Claude Code CLI for user (manual environment setup)
-HOME=/home/user USER=user sudo -u user bash -c '
-  export HOME=/home/user
-  export PATH="$HOME/.local/bin:$PATH"
-  curl -fsSL https://claude.ai/install.sh | bash
-'
 ```
 
 ## Files Summary
 
 | File | Action | Purpose |
 |------|--------|---------|
-| scripts/template-build.sh | Modify | Fix user Claude installation |
+| scripts/template-build.sh | Modify | Add PATH config and fix Claude installation |
 
 ## Verification
 
@@ -94,6 +103,7 @@ sb connect <vm-name>
 su - user
 claude --version
 which claude
+echo $PATH  # Should include ~/.local/bin
 ```
 
 ## Update Considerations
