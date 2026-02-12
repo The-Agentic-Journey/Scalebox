@@ -47,6 +47,12 @@ configure_rootfs() {
   # Set up bind mounts for chroot environment
   setup_chroot_mounts "$rootfs_dir"
 
+  # Install packages that need proper chroot environment (nodejs, npm, python3-pip)
+  # These fail if included in debootstrap because their postinst scripts need /dev, /proc, /sys
+  echo "[template-build] Installing development packages..."
+  chroot "$rootfs_dir" apt-get update
+  chroot "$rootfs_dir" apt-get install -y nodejs npm python3 python3-pip python3-venv
+
   chroot "$rootfs_dir" /bin/bash <<'CHROOT'
 # Configure locale for mosh
 sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
@@ -147,8 +153,10 @@ build_debian_base() {
   # Set up cleanup trap
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT
 
-  # Run debootstrap with all required packages
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo,curl,wget,vim,nodejs,npm,python3,python3-pip,python3-venv \
+  # Run debootstrap with minimal packages
+  # Note: nodejs, npm, python3-pip, python3-venv are installed later in configure_rootfs
+  # because their postinst scripts need /dev, /proc, /sys mounted
+  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo,curl,wget,vim \
     bookworm "$rootfs_dir" http://deb.debian.org/debian
 
   # Configure the rootfs
