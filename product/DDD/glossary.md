@@ -195,3 +195,9 @@ A version number stored in `debian-base.version` that tracks template contents. 
 
 ### Template Rebuild
 The process of recreating a template with updated packages using `scalebox-rebuild-template`. Required after updates that add new packages to the base template. Running VMs are not affected due to btrfs copy-on-write - they continue using their existing rootfs copies while new VMs use the updated template.
+
+### Orphaned Resource
+A system resource (Firecracker process, TAP device, rootfs file) that exists on the host but is not tracked in scaleboxd's in-memory VM state. Orphans occur when state.json is missing, corrupted, or predates the state persistence feature (plan 018). Orphaned resources are automatically discovered and cleaned up on startup by the reconciliation process.
+
+### Reconciliation
+The startup process that scans the host for system resources not tracked in state.json and cleans them up. Runs after VM recovery. Discovers orphaned Firecracker processes (via `pgrep`), TAP devices (via `/sys/class/net/`), and rootfs files (via directory listing). Each discovered orphan is logged with `[reconcile]` prefix and cleaned up automatically.
