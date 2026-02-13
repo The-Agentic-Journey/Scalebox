@@ -84,7 +84,10 @@ Caddy's mechanism for obtaining TLS certificates only when first requested. Vali
 Amazon's lightweight microVM hypervisor. Provides fast boot times and strong isolation. Controlled via Unix socket API.
 
 ### Kernel
-The Linux kernel image (`vmlinux`) booted by Firecracker. Shared by all VMs.
+The Linux kernel image (`vmlinux`) booted by Firecracker. Shared by all VMs. Minimum kernel 5.6+ is required for Bun runtime compatibility. The installed version is tracked by a kernel version file for automated upgrades.
+
+### Kernel Version File
+A file at `/var/lib/scalebox/kernel/version` containing the kernel version string (e.g., `5.10.245`). Created during installation and checked by `scalebox-update` to detect when a kernel upgrade is needed. Absent on pre-024 installations, which triggers an automatic upgrade.
 
 ### Socket Path
 The Unix socket (`/tmp/firecracker-{vm-id}.sock`) used to configure and control a Firecracker instance.

@@ -187,6 +187,20 @@ describe("Firecracker API", () => {
 		{ timeout: 90000 },
 	);
 
+	// === Kernel Version ===
+	test(
+		"VM boots with kernel 5.10",
+		async () => {
+			const vm = await sbVmCreate("debian-base");
+			createdVmIds.push(vm.id as string);
+
+			await waitForSsh(vm.ssh_port as number, 90000);
+			const output = await sshExec(vm.ssh_port as number, "uname -r");
+			expect(output.trim()).toMatch(/^5\.10\./);
+		},
+		{ timeout: 90000 },
+	);
+
 	// === Phase 6: Snapshots ===
 	test(
 		"snapshot VM creates template",

@@ -19,7 +19,8 @@ VM_DOMAIN="${VM_DOMAIN:-}"
 ACME_STAGING="${ACME_STAGING:-false}"
 
 FC_VERSION="1.10.1"
-KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+KERNEL_VERSION="5.10.245"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/x86_64/vmlinux-${KERNEL_VERSION}"
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -116,8 +117,9 @@ install_firecracker() {
   fi
 
   if [[ ! -f "$kernel_path" ]]; then
-    log "Downloading kernel..."
+    log "Downloading kernel ${KERNEL_VERSION}..."
     wget -q "$KERNEL_URL" -O "$kernel_path"
+    echo "$KERNEL_VERSION" > "$DATA_DIR/kernel/version"
   fi
 }
 
