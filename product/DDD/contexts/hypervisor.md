@@ -256,6 +256,7 @@ VM console output is captured for debugging:
 | `firecracker` | Hypervisor binary | PATH (installed by install.sh) |
 | `curl` | API communication | System utility |
 | Linux kernel | VM boot image | `/var/lib/scalebox/kernel/vmlinux` |
+| Kernel version file | Tracks installed kernel version | `/var/lib/scalebox/kernel/version` |
 | KVM | Hardware virtualization | `/dev/kvm` |
 
 ---
