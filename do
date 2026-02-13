@@ -418,6 +418,12 @@ check_firewall_rule() {
   echo "==> Firewall rule OK"
 }
 
+test_reconciliation() {
+  local token=$1
+  echo "==> SKIP: reconciliation tests (not yet implemented)"
+  return 0
+}
+
 do_check() {
   trap cleanup EXIT
 
@@ -523,6 +529,9 @@ do_check() {
 
   echo ""
   echo "==> All tests passed!"
+
+  echo "==> Running reconciliation tests..."
+  test_reconciliation "$token"
 }
 
 do_check_update() {
