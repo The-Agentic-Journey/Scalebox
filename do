@@ -420,8 +420,56 @@ check_firewall_rule() {
 
 test_reconciliation() {
   local token=$1
-  echo "==> SKIP: reconciliation tests (not yet implemented)"
-  return 0
+
+  # --- Sub-test: VM survives restart ---
+  echo "==> Test: VMs survive scaleboxd restart..."
+
+  local create_result
+  create_result=$(curl -sk -X POST "https://$VM_FQDN/vms" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
+
+  local vm_id
+  vm_id=$(echo "$create_result" | jq -r '.id')
+  [[ "$vm_id" == vm-* ]] || die "Failed to create VM for reconciliation test: $create_result"
+  echo "    Created VM: $vm_id"
+
+  # Restart scaleboxd (state.json stays intact)
+  echo "    Restarting scaleboxd..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo systemctl restart scaleboxd" \
+    --quiet
+
+  # Wait for health
+  echo "    Waiting for scaleboxd..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if curl -sk "https://$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  [[ $retries -gt 0 ]] || die "scaleboxd did not become healthy after restart"
+
+  # Verify VM survived
+  local list_after
+  list_after=$(curl -sk "https://$VM_FQDN/vms" -H "Authorization: Bearer $token")
+  echo "$list_after" | jq -e ".vms[] | select(.id == \"$vm_id\")" >/dev/null \
+    || die "VM $vm_id not found after restart — VM did not survive"
+  echo "    PASS: VM survived restart"
+
+  # Clean up the test VM
+  curl -sk -X DELETE "https://$VM_FQDN/vms/$vm_id" \
+    -H "Authorization: Bearer $token" >/dev/null
+
+  # --- Placeholder for Phase 3 orphan cleanup test ---
+  echo "==> SKIP: orphan cleanup test (not yet implemented)"
+
+  echo "==> Reconciliation tests PASSED"
 }
 
 do_check() {
