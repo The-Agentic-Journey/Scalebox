@@ -11,6 +11,8 @@ DATA_DIR="/var/lib/scalebox"
 # Extract required template version from template-build.sh (single source of truth)
 REQUIRED_TEMPLATE_VERSION=$(grep -E '^TEMPLATE_VERSION=' /usr/local/lib/scalebox/template-build.sh | cut -d= -f2)
 SCALEBOXD_BIN="/usr/local/bin/scaleboxd"
+REQUIRED_KERNEL_VERSION="5.10.245"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/x86_64/vmlinux-${REQUIRED_KERNEL_VERSION}"
 SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
 HEALTH_URL="http://localhost:8080/health"
 HEALTH_RETRIES=15
@@ -161,6 +163,30 @@ cleanup() {
   rm -f "${SCALEBOXD_BIN}.prev" 2>/dev/null || true
 }
 
+upgrade_kernel() {
+  local kernel_path="$DATA_DIR/kernel/vmlinux"
+  local version_file="$DATA_DIR/kernel/version"
+  local current_version=""
+
+  if [[ -f "$version_file" ]]; then
+    current_version=$(cat "$version_file")
+  fi
+
+  if [[ "$current_version" == "$REQUIRED_KERNEL_VERSION" ]]; then
+    return 0
+  fi
+
+  log "Upgrading kernel to ${REQUIRED_KERNEL_VERSION}..."
+  if wget -q "$KERNEL_URL" -O "${kernel_path}.new"; then
+    mv "${kernel_path}.new" "$kernel_path"
+    echo "$REQUIRED_KERNEL_VERSION" > "$version_file"
+    log "Kernel upgraded (new VMs will use 5.10, existing VMs unaffected until recreated)"
+  else
+    rm -f "${kernel_path}.new"
+    log "WARNING: Kernel download failed. Continuing with current kernel."
+  fi
+}
+
 check_template_version() {
   local version_file="$DATA_DIR/templates/debian-base.version"
   local current_version=0
@@ -292,6 +318,7 @@ main() {
   backup_current
   stop_service
   install_new "$temp_dir"
+  upgrade_kernel
   migrate_caddy_config
   start_service
 

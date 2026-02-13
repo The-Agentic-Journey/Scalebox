@@ -188,7 +188,7 @@ describe("Firecracker API", () => {
 	);
 
 	// === Kernel Version ===
-	test.skip(
+	test(
 		"VM boots with kernel 5.10",
 		async () => {
 			const vm = await sbVmCreate("debian-base");
