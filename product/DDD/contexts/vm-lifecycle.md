@@ -212,14 +212,15 @@ Mutex ensuring only one VM creation runs at a time. Prevents:
 
 ---
 
-## Repository (In-Memory)
+## Repository
 
 ```typescript
 const vms = new Map<string, VM>();
 ```
 
-- **No persistence:** VMs are lost on server restart
-- **Design decision:** VMs are ephemeral; persistent state is in templates
+- **Persisted to disk:** VM state is saved to `/var/lib/scalebox/vms/state.json` after every creation and deletion
+- **Recovery on startup:** `recoverVms()` reads state.json, checks if Firecracker PIDs are alive, and reconnects or cleans up dead VMs
+- **Reconciliation on startup:** `reconcileOrphans()` scans for system resources not tracked in the VM Map and cleans them up (orphaned processes, TAP devices, rootfs files)
 - **Exported:** Accessed by Access context for Caddy configuration
 
 ---

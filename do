@@ -418,6 +418,148 @@ check_firewall_rule() {
   echo "==> Firewall rule OK"
 }
 
+test_reconciliation() {
+  local token=$1
+
+  # --- Sub-test: VM survives restart ---
+  echo "==> Test: VMs survive scaleboxd restart..."
+
+  local create_result
+  create_result=$(curl -sk -X POST "https://$VM_FQDN/vms" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
+
+  local vm_id
+  vm_id=$(echo "$create_result" | jq -r '.id')
+  [[ "$vm_id" == vm-* ]] || die "Failed to create VM for reconciliation test: $create_result"
+  echo "    Created VM: $vm_id"
+
+  # Restart scaleboxd (state.json stays intact)
+  echo "    Restarting scaleboxd..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo systemctl restart scaleboxd" \
+    --quiet
+
+  # Wait for health
+  echo "    Waiting for scaleboxd..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if curl -sk "https://$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  [[ $retries -gt 0 ]] || die "scaleboxd did not become healthy after restart"
+
+  # Verify VM survived
+  local list_after
+  list_after=$(curl -sk "https://$VM_FQDN/vms" -H "Authorization: Bearer $token")
+  echo "$list_after" | jq -e ".vms[] | select(.id == \"$vm_id\")" >/dev/null \
+    || die "VM $vm_id not found after restart — VM did not survive"
+  echo "    PASS: VM survived restart"
+
+  # Clean up the test VM
+  curl -sk -X DELETE "https://$VM_FQDN/vms/$vm_id" \
+    -H "Authorization: Bearer $token" >/dev/null
+
+  # --- Sub-test: Orphan cleanup ---
+  echo "==> Test: Orphan cleanup on startup..."
+
+  # Create a VM (this will become an orphan)
+  local orphan_result
+  orphan_result=$(curl -sk -X POST "https://$VM_FQDN/vms" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
+
+  local orphan_id
+  orphan_id=$(echo "$orphan_result" | jq -r '.id')
+  [[ "$orphan_id" == vm-* ]] || die "Failed to create orphan VM: $orphan_result"
+  echo "    Created orphan VM: $orphan_id"
+
+  # Stop scaleboxd, delete state.json, start scaleboxd
+  # This simulates the pre-persistence era: VM resources exist but scaleboxd has no record
+  echo "    Simulating orphan scenario (deleting state.json)..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo systemctl stop scaleboxd && sudo rm -f /var/lib/scalebox/vms/state.json && sudo systemctl start scaleboxd" \
+    --quiet
+
+  # Wait for health
+  echo "    Waiting for scaleboxd..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if curl -sk "https://$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  [[ $retries -gt 0 ]] || die "scaleboxd did not become healthy after orphan test restart"
+
+  # Note: reconciliation runs synchronously during startup (before HTTP server starts),
+  # so by the time the health check passes, reconciliation has already completed.
+
+  # Verify: no VMs listed (the orphan should have been cleaned up)
+  local vm_count
+  vm_count=$(curl -sk "https://$VM_FQDN/vms" -H "Authorization: Bearer $token" | jq '.vms | length')
+  [[ "$vm_count" == "0" ]] || die "Expected 0 VMs after orphan cleanup, got $vm_count"
+  echo "    PASS: No VMs listed"
+
+  # Verify: no orphaned Firecracker processes
+  local fc_count
+  fc_count=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="pgrep -c firecracker 2>/dev/null || true" \
+    --quiet)
+  fc_count=$(echo "$fc_count" | tr -d '[:space:]')
+  [[ "$fc_count" == "0" ]] || die "Expected 0 Firecracker processes, got $fc_count"
+  echo "    PASS: No orphaned Firecracker processes"
+
+  # Verify: no orphaned TAP devices
+  local tap_count
+  tap_count=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="ip -o link show | grep -c 'tap-' || true" \
+    --quiet)
+  tap_count=$(echo "$tap_count" | tr -d '[:space:]')
+  [[ "$tap_count" == "0" ]] || die "Expected 0 TAP devices, got $tap_count"
+  echo "    PASS: No orphaned TAP devices"
+
+  # Verify: no orphaned rootfs files
+  local rootfs_count
+  rootfs_count=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="ls /var/lib/scalebox/vms/*.ext4 2>/dev/null | wc -l" \
+    --quiet)
+  rootfs_count=$(echo "$rootfs_count" | tr -d '[:space:]')
+  [[ "$rootfs_count" == "0" ]] || die "Expected 0 rootfs files, got $rootfs_count"
+  echo "    PASS: No orphaned rootfs files"
+
+  # Verify: reconciliation log messages exist
+  local logs
+  logs=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo journalctl -u scaleboxd --no-pager -n 50" \
+    --quiet)
+  echo "$logs" | grep -q "\[reconcile\] Found orphaned" \
+    || die "Expected '[reconcile] Found orphaned' log entries in scaleboxd journal"
+  echo "$logs" | grep -q "\[reconcile\] Cleaned up:" \
+    || die "Expected '[reconcile] Cleaned up:' summary in scaleboxd journal"
+  echo "    PASS: Reconciliation log messages present"
+
+  echo "==> Reconciliation tests PASSED"
+}
+
 do_check() {
   trap cleanup EXIT
 
@@ -523,6 +665,9 @@ do_check() {
 
   echo ""
   echo "==> All tests passed!"
+
+  echo "==> Running reconciliation tests..."
+  test_reconciliation "$token"
 }
 
 do_check_update() {

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
+import { reconcileOrphans } from "./services/reconcile";
 import { getCpuUsage, getHostIp, getMemoryStats, getStorageStats } from "./services/system";
 import { deleteTemplate, listTemplates } from "./services/template";
 import { cleanupOrphanedUdpRules } from "./services/udpProxy";
@@ -166,6 +167,7 @@ await cleanupOrphanedUdpRules();
 
 // Recover VMs from previous run
 await recoverVms();
+await reconcileOrphans();
 
 // Initialize Caddy config on startup to ensure vms.caddy matches current VM state
 updateCaddyConfig().then(() => {

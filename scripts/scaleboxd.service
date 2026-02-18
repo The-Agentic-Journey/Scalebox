@@ -9,6 +9,7 @@ ExecStart=/usr/local/bin/scaleboxd
 EnvironmentFile=/etc/scaleboxd/config
 Restart=on-failure
 RestartSec=5
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
