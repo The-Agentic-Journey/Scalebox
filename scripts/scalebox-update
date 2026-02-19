@@ -297,6 +297,26 @@ EOF
   log "Caddyfile migration complete"
 }
 
+migrate_host_ip() {
+  local config_file="/etc/scaleboxd/config"
+
+  # Skip if already has HOST_IP
+  if grep -q "^HOST_IP=" "$config_file" 2>/dev/null; then
+    return 0
+  fi
+
+  log "Adding HOST_IP to config (required by new version)..."
+  local host_ip
+  host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  if [[ -n "$host_ip" ]]; then
+    echo "HOST_IP=$host_ip" >> "$config_file"
+    log "HOST_IP set to $host_ip (auto-detected). Edit /etc/scaleboxd/config if this is not the external IP."
+  else
+    echo "HOST_IP=" >> "$config_file"
+    log "WARNING: Could not auto-detect HOST_IP. Set HOST_IP in /etc/scaleboxd/config before restarting."
+  fi
+}
+
 main() {
   log "Starting Scalebox update..."
 
@@ -320,6 +340,7 @@ main() {
   install_new "$temp_dir"
   upgrade_kernel
   migrate_caddy_config
+  migrate_host_ip
   start_service
 
   if health_check; then
