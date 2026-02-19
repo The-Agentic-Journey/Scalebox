@@ -3,9 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 concurrency:
-  group: ci-main
+  group: ci-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: true
 
 env:
@@ -14,7 +16,39 @@ env:
   DNS_SUFFIX: ${{ secrets.DNS_SUFFIX }}
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache bun
+        uses: actions/cache@v4
+        with:
+          path: .bun
+          key: bun-${{ runner.os }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('package.json', 'bun.lockb') }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint
+        run: ./do lint
+
   check:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -57,6 +91,7 @@ jobs:
           path: builds/
 
   check-update:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -93,6 +128,7 @@ jobs:
         run: ./do check-update
 
   release:
+    if: github.event_name == 'push'
     needs: [check, check-update]
     runs-on: ubuntu-latest
     timeout-minutes: 5
