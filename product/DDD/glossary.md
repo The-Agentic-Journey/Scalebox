@@ -38,8 +38,11 @@ A virtual network interface (`tap-*`) that connects a VM to the host's network b
 ### Bridge (br0)
 The network bridge (`172.16.0.1/16`) that connects all VM TAP devices, enabling VM-to-host and VM-to-internet communication.
 
-### IP Address
-Private IP assigned to each VM from the `172.16.0.0/16` range. Sequential allocation starting from `172.16.0.2`.
+### IP Address (Internal)
+Private IP assigned to each VM from the `172.16.0.0/16` range. Sequential allocation starting from `172.16.0.2`. Used internally for bridge networking, proxy forwarding, and Caddy routing. Not exposed to API consumers (see **Host IP**).
+
+### Host IP
+The external IP address of the Scalebox host server. Required config value (`HOST_IP` in `/etc/scaleboxd/config`), set during installation. Returned in the `ip` field of VM API responses so clients know where to connect. The server refuses to start if `HOST_IP` is not set.
 
 ### MAC Address
 Unique hardware address derived from the VM ID. Format: `AA:FC:XX:XX:XX:XX` where XX bytes come from the VM ID.

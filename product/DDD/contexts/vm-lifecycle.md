@@ -96,7 +96,7 @@ interface VMResponse {
   id: string;
   name: string;
   template: string;
-  ip: string;
+  ip: string;           // Host IP (for client connections, not internal bridge IP)
   ssh_port: number;
   ssh: string;           // Convenience: full SSH command
   url: string | null;    // HTTPS URL if baseDomain configured
@@ -177,6 +177,7 @@ Creates a template from a running VM:
 ### vmToResponse(vm: VM): VMResponse
 
 Transforms internal VM to external representation, computing derived fields:
+- `ip`: Host IP from config (replaces internal bridge IP with the server's externally-reachable address)
 - `ssh`: Full SSH command string
 - `url`: HTTPS URL (if baseDomain configured)
 - `status`: Always "running" (stopped VMs are deleted)
