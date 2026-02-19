@@ -105,8 +105,21 @@ describe("Firecracker API", () => {
 		expect(vm.id).toMatch(/^vm-[a-f0-9]{12}$/);
 		expect(vm.name).toBeDefined();
 		expect(vm.template).toBe("debian-base");
-		expect(vm.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+		expect(vm.ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
 		expect(vm.ssh_port).toBeGreaterThan(22000);
+	});
+
+	test("VM response contains host IP instead of bridge IP", async () => {
+		const vm = await sbVmCreate("debian-base");
+		if (vm?.id) createdVmIds.push(vm.id as string);
+
+		// ip should be the host IP, not internal bridge IP (172.16.x.x)
+		expect(vm.ip).not.toMatch(/^172\.16\./);
+		expect(vm.ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+
+		// ssh field should use the same host IP
+		expect(vm.ssh).toContain(vm.ip as string);
+		expect(vm.ssh).not.toContain("localhost");
 	});
 
 	test("created VM appears in list", async () => {

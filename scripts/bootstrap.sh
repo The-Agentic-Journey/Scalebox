@@ -101,6 +101,18 @@ configure() {
     VM_DOMAIN=$(prompt "Enter VM domain (optional, press Enter to skip)")
   fi
 
+  # HOST_IP - external IP for API responses
+  if [[ -z "${HOST_IP:-}" ]]; then
+    local detected_ip
+    detected_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo ""
+    echo "Scalebox includes the server's IP address in API responses"
+    echo "so clients know where to connect via SSH."
+    echo "On cloud VMs (GCE, AWS), use the public IP, not the VPC-internal IP."
+    echo ""
+    HOST_IP=$(prompt "Enter host IP" "${detected_ip:-}")
+  fi
+
   echo ""
 }
 
@@ -146,6 +158,7 @@ run_installer() {
   # Export config for install.sh
   export API_DOMAIN="${API_DOMAIN:-}"
   export VM_DOMAIN="${VM_DOMAIN:-}"
+  export HOST_IP="${HOST_IP:-}"
   export INSTALL_DIR
 
   # Run install.sh

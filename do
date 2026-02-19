@@ -155,7 +155,7 @@ provision_vm_bootstrap() {
 set timeout 900
 log_user 1
 
-spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true bash /tmp/bootstrap.sh"
+spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true HOST_IP='$VM_IP' bash /tmp/bootstrap.sh"
 
 expect {
     "Enter API domain (or press Enter to skip HTTPS): " {
@@ -164,6 +164,10 @@ expect {
     }
     "Enter VM domain (optional, press Enter to skip): " {
         send "\r"
+        exp_continue
+    }
+    "Enter host IP" {
+        send "$VM_IP\r"
         exp_continue
     }
     timeout {
