@@ -1397,12 +1397,12 @@ Record the architectural decision to switch from HTTP-01 per-VM certificates to 
 
 | File | Action | Details |
 |------|--------|---------|
-| `product/ADR/014-dns-wildcard-certificates.md` | Create | ADR documenting this decision |
+| `product/ADR/016-dns-wildcard-certificates.md` | Create | ADR documenting this decision |
 
 ### ADR Content:
 
 ```markdown
-# ADR 014: DNS-01 Wildcard Certificates with In-Process DNS Server
+# ADR 016: DNS-01 Wildcard Certificates with In-Process DNS Server
 
 ## Status
 Accepted
@@ -1485,7 +1485,7 @@ This is a one-time manual step, not a code change. The `./do check` script will 
 | `product/DDD/glossary.md` | Modify | New terms: Base Domain, DNS Server, Wildcard Certificate, DNS-01 Challenge, ACME Proxy |
 | `product/DDD/contexts/access.md` | Modify | Update HTTPS Gateway for DNS-01 architecture |
 | `product/DDD/context-map.md` | Modify | Add DNS Server to Access sub-contexts, file mapping |
-| `product/ADR/014-dns-wildcard-certificates.md` | Create | Decision record |
+| `product/ADR/016-dns-wildcard-certificates.md` | Create | Decision record |
 
 ---
 
