@@ -3,7 +3,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
 import { reconcileOrphans } from "./services/reconcile";
-import { getCpuUsage, getHostIp, getMemoryStats, getStorageStats } from "./services/system";
+import { getCpuUsage, getMemoryStats, getStorageStats } from "./services/system";
 import { deleteTemplate, listTemplates } from "./services/template";
 import { cleanupOrphanedUdpRules } from "./services/udpProxy";
 import {
@@ -33,8 +33,7 @@ app.get("/info", async (c) => {
 	const memoryStats = await getMemoryStats();
 	const cpuUsage = await getCpuUsage();
 
-	// Get host IP (from config or auto-detect)
-	const hostIp = config.hostIp || (await getHostIp());
+	const hostIp = config.hostIp;
 
 	return c.json({
 		host_ip: hostIp,
@@ -161,6 +160,13 @@ app.post("/vms/:id/snapshot", async (c) => {
 });
 
 const host = "0.0.0.0";
+
+// Validate required config
+if (!config.hostIp) {
+	console.error("FATAL: HOST_IP not set in /etc/scaleboxd/config.");
+	console.error("Set it to this server's external IP address and restart scaleboxd.");
+	process.exit(1);
+}
 
 // Clean up orphaned UDP proxy rules from previous runs
 await cleanupOrphanedUdpRules();

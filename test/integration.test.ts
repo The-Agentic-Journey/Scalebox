@@ -105,11 +105,11 @@ describe("Firecracker API", () => {
 		expect(vm.id).toMatch(/^vm-[a-f0-9]{12}$/);
 		expect(vm.name).toBeDefined();
 		expect(vm.template).toBe("debian-base");
-		expect(vm.ip).toMatch(/^172\.16\.\d+\.\d+$/);
+		expect(vm.ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
 		expect(vm.ssh_port).toBeGreaterThan(22000);
 	});
 
-	test.skip("VM response contains host IP instead of bridge IP", async () => {
+	test("VM response contains host IP instead of bridge IP", async () => {
 		const vm = await sbVmCreate("debian-base");
 		if (vm?.id) createdVmIds.push(vm.id as string);
 

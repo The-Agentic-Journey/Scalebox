@@ -325,15 +325,14 @@ export async function deleteVm(vm: VM): Promise<void> {
 }
 
 export function vmToResponse(vm: VM): VMResponse {
-	const host = process.env.VM_HOST || "localhost";
 	const url = config.vmDomain ? `https://${vm.name}.${config.vmDomain}` : null;
 	return {
 		id: vm.id,
 		name: vm.name,
 		template: vm.template,
-		ip: vm.ip,
+		ip: config.hostIp,
 		ssh_port: vm.port,
-		ssh: `ssh -p ${vm.port} user@${host}`,
+		ssh: `ssh -p ${vm.port} user@${config.hostIp}`,
 		url,
 		status: "running",
 		created_at: vm.createdAt.toISOString(),
