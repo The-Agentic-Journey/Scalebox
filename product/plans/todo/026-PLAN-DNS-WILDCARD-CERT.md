@@ -12,6 +12,20 @@ The implementation adds an in-process DNS server (using `dns2` npm package) to t
 - VMs: `{name}.vm.{BASE_DOMAIN}` (e.g., `happy-blue-fox.vm.scalebox.example.com`)
 - User DNS setup: one NS record delegating `BASE_DOMAIN` to the host
 
+## Prerequisites
+
+**Plan 025 (External Host IP) must be implemented first.** This plan depends on Plan 025's guarantee that `config.hostIp` is always non-empty at startup. All file modifications in this plan incorporate Plan 025's changes (HOST_IP config, startup validation, vmToResponse using config.hostIp).
+
+## Implementation Note — Phase Atomicity
+
+**Phases 2–5 and the `./do`/test-infrastructure changes from Phase 8 form a single atomic implementation unit.** They are numbered separately for readability, but must all be implemented and deployed together before `./do check` can pass. The reason: Phase 2 changes `config.ts` (removing `apiDomain`/`vmDomain`), Phase 3 adds the DNS server, Phase 4 adds ACME proxy endpoints, Phase 5 rewrites `caddy.ts` to use `baseDomain`, and Phase 8 updates `./do` DNS records/expect script and `test/helpers.ts` to match the new domain structure. None of these work in isolation.
+
+The red-green ATDD cycle operates across this combined unit:
+1. Unskip all acceptance tests for criteria #1–#4 at the start
+2. Verify they all fail (red)
+3. Implement all changes in Phases 2–6
+4. Verify `./do check` passes (green)
+
 ## Acceptance Criteria
 
 | # | Criterion | Acceptance Test |
@@ -108,7 +122,7 @@ Verify the tests **fail** before implementing production code.
 | `src/services/vm.ts` | Modify | Line 329: change `const url = config.vmDomain ? \`https://${vm.name}.${config.vmDomain}\` : null;` to `const url = config.baseDomain ? \`https://${vm.name}.vm.${config.baseDomain}\` : null;` |
 | `src/services/caddy.ts` | Modify | Replace `config.vmDomain` references with `config.baseDomain` and use `vm.${config.baseDomain}` for the wildcard domain. Details in Phase 5. For now, update the domain references: line 53 `if (!config.baseDomain)`, line 62 `${vm.name}.vm.${config.baseDomain}`, line 70 `*.vm.${config.baseDomain}` |
 | `test/helpers.ts` | Modify | Change `API_BASE_URL` to include `api.` prefix for HTTPS: `export const API_BASE_URL = USE_HTTPS ? \`https://api.${VM_HOST}\` : \`http://${VM_HOST}:${API_PORT}\`;` — this reflects the new domain structure where the API lives at `api.{BASE_DOMAIN}`. `VM_HOST` remains the raw FQDN (the BASE_DOMAIN), used directly for SSH and `dig` commands |
-| `scripts/sb` | Modify | Line 308: change `'.api_domain // "N/A"'` to `'.base_domain // "N/A"'` and update the label from `"API:"` to `"Domain:"` (since base_domain is the base, not the API URL). Also update the adjacent VM domain line if present. |
+| `scripts/sb` | Modify | Line 308: change `echo "API:  $(echo "$response" \| jq -r '.api_domain // "N/A"')"` to `echo "Domain: $(echo "$response" \| jq -r '.base_domain // "N/A"')"`. No adjacent VM domain line exists in the current `cmd_status()` function — no other changes needed. |
 
 ### Specific changes to `src/config.ts`:
 
@@ -130,7 +144,7 @@ export const config = {
 	// API at api.{baseDomain}, VMs at {name}.vm.{baseDomain}
 	baseDomain: process.env.BASE_DOMAIN || "",
 	acmeStaging: process.env.ACME_STAGING === "true",
-	// Host IP for external access (auto-detected if not set)
+	// Host IP for external access (required — set during installation)
 	hostIp: process.env.HOST_IP || "",
 	// Internal password for Caddy ACME proxy communication
 	acmeProxyPassword: process.env.ACME_PROXY_PASSWORD || "",
@@ -196,7 +210,6 @@ Verify the tests **fail** before implementing production code.
 ```typescript
 import dns2 from "dns2";
 import { config } from "../config";
-import { getHostIp } from "./system";
 
 const { Packet } = dns2;
 
@@ -216,7 +229,8 @@ export function deleteAcmeTxtRecord(fqdn: string): void {
 export async function startDnsServer(): Promise<void> {
 	if (!config.baseDomain) return;
 
-	const hostIp = config.hostIp || (await getHostIp());
+	// config.hostIp is guaranteed non-empty at startup (Plan 025)
+	const hostIp = config.hostIp;
 	const zone = config.baseDomain.toLowerCase();
 
 	const server = dns2.createServer({
@@ -513,7 +527,6 @@ import { exec as execCallback } from "node:child_process";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { config } from "../config";
-import { getHostIp } from "./system";
 import { vms } from "./vm";
 
 const exec = promisify(execCallback);
@@ -663,7 +676,7 @@ Update `install.sh` to download a custom Caddy binary with the `acmeproxy` modul
 
 ### Detailed changes to `scripts/install.sh`:
 
-**1. Config variables (lines 17–18):**
+**1. Config variables (lines 17–19):**
 Replace:
 ```bash
 API_DOMAIN="${API_DOMAIN:-}"
@@ -675,7 +688,9 @@ BASE_DOMAIN="${BASE_DOMAIN:-}"
 ACME_PROXY_PASSWORD="${ACME_PROXY_PASSWORD:-}"
 ```
 
-**2. `install_caddy()` function (lines 258–313):**
+Note: After Plan 025, line 19 also has `HOST_IP="${HOST_IP:-}"`. Keep that line — it sits after the new `ACME_PROXY_PASSWORD` line. The full block becomes: `BASE_DOMAIN`, `ACME_PROXY_PASSWORD`, `HOST_IP`.
+
+**2. `install_caddy()` function (lines 260–315):**
 Replace the entire function with:
 ```bash
 install_caddy() {
@@ -740,7 +755,7 @@ VMSCADDYEOF
 
 Note: Caddy runs as `root` (not the `caddy` user) because it needs to bind to port 443 and the custom service file is simpler. The placeholder Caddyfile is minimal — `scaleboxd` generates the full config on startup.
 
-**3. `wait_for_https()` function (lines 316–367):**
+**3. `wait_for_https()` function (lines 317–369):**
 Replace:
 ```bash
   [[ -n "$API_DOMAIN" ]] || return 0
@@ -756,17 +771,24 @@ Replace all references to `$API_DOMAIN` with `api.$BASE_DOMAIN`:
 - Line 349: `curl -v "https://api.$BASE_DOMAIN/health"`
 - Line 366: `die "Failed to obtain TLS certificate for api.$BASE_DOMAIN"`
 
-**4. `install_service()` config file (lines 440–448):**
-Replace:
+**4. `install_service()` config file (lines 442–450):**
+
+After Plan 025, the heredoc contains `API_DOMAIN`, `VM_DOMAIN`, `ACME_STAGING`, and `HOST_IP` lines. Replace ALL FOUR domain/IP related lines with the new layout. The full heredoc body becomes:
+
 ```bash
-API_DOMAIN=$API_DOMAIN
-VM_DOMAIN=$VM_DOMAIN
-```
-With:
-```bash
+    cat > /etc/scaleboxd/config <<EOF
+API_PORT=$API_PORT
+API_TOKEN=$API_TOKEN
+DATA_DIR=$DATA_DIR
+KERNEL_PATH=$DATA_DIR/kernel/vmlinux
 BASE_DOMAIN=$BASE_DOMAIN
+HOST_IP=$HOST_IP
 ACME_PROXY_PASSWORD=$ACME_PROXY_PASSWORD
+ACME_STAGING=$ACME_STAGING
+EOF
 ```
+
+**IMPORTANT:** Plan 025 adds `HOST_IP=$HOST_IP` after the `ACME_STAGING` line. Plan 026 must replace the ENTIRE heredoc body (not just the API_DOMAIN/VM_DOMAIN lines) to avoid a duplicate `HOST_IP` entry. The heredoc above is the complete, final content.
 
 Add before the config file write (after the API_TOKEN generation block):
 ```bash
@@ -777,7 +799,7 @@ Add before the config file write (after the API_TOKEN generation block):
   [[ -z "$ACME_PROXY_PASSWORD" ]] && ACME_PROXY_PASSWORD="$(openssl rand -hex 32)"
 ```
 
-**5. Function call order in `main()` (lines 515–518):**
+**5. Function call order in `main()` (lines 515–520):**
 
 **CRITICAL**: Move `install_caddy` before `start_service`. Since scaleboxd now generates the full Caddyfile on startup, `/etc/caddy/` must exist before scaleboxd starts. Change:
 ```bash
@@ -791,7 +813,7 @@ Add before the config file write (after the API_TOKEN generation block):
 
 The old order was `install_service → start_service → install_caddy`. The new order is `install_service → install_caddy → start_service`, so that when scaleboxd starts, it can write the Caddyfile to `/etc/caddy/Caddyfile` and reload Caddy.
 
-**6. Final output (lines 521–531):**
+**6. Final output (lines 522–534):**
 Replace the domain output block with:
 ```bash
   if [[ -n "$BASE_DOMAIN" ]]; then
@@ -857,6 +879,18 @@ configure() {
     BASE_DOMAIN=$(prompt "Enter base domain (or press Enter to skip HTTPS)")
   fi
 
+  # HOST_IP - external IP for API responses (from Plan 025)
+  if [[ -z "${HOST_IP:-}" ]]; then
+    local detected_ip
+    detected_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo ""
+    echo "Scalebox includes the server's IP address in API responses"
+    echo "so clients know where to connect via SSH."
+    echo "On cloud VMs (GCE, AWS), use the public IP, not the VPC-internal IP."
+    echo ""
+    HOST_IP=$(prompt "Enter host IP" "${detected_ip:-}")
+  fi
+
   echo ""
 }
 ```
@@ -870,6 +904,7 @@ Replace:
 With:
 ```bash
   export BASE_DOMAIN="${BASE_DOMAIN:-}"
+  export HOST_IP="${HOST_IP:-}"
   # Backward compatibility: old install.sh scripts use API_DOMAIN and VM_DOMAIN.
   # When check-update bootstraps with the old release tarball, the old install.sh
   # reads these vars. Derive them from BASE_DOMAIN for backward compat.
@@ -884,7 +919,7 @@ Replace:
 ```
 With:
 ```bash
-  if [[ -z "${BASE_DOMAIN:-}" && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
+  if [[ ( -z "${BASE_DOMAIN:-}" || -z "${HOST_IP:-}" ) && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
 ```
 
 ### Verification
@@ -1054,11 +1089,15 @@ Replace the expect script content. The script handles both the new single-prompt
 set timeout 900
 log_user 1
 
-spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true bash /tmp/bootstrap.sh"
+spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true HOST_IP='$VM_IP' bash /tmp/bootstrap.sh"
 
 expect {
     "Enter base domain (or press Enter to skip HTTPS)" {
         send "$VM_FQDN\r"
+        exp_continue
+    }
+    "Enter host IP" {
+        send "$VM_IP\r"
         exp_continue
     }
     "Enter API domain (or press Enter to skip HTTPS)" {
@@ -1287,12 +1326,16 @@ CADDYSERVICEEOF
 
 **4. Call the new migration functions in `main()`:**
 
-In the `main()` function, add these calls before existing migration steps:
+In the `main()` function, replace the existing migration sequence. After Plan 025, the sequence is `migrate_caddy_config`, `migrate_host_ip`, `start_service`. Replace with:
 ```bash
   migrate_config_to_base_domain
+  migrate_host_ip
   migrate_caddy_binary
   migrate_caddy_config
+  start_service
 ```
+
+Order matters: `migrate_config_to_base_domain` runs first (converts API_DOMAIN/VM_DOMAIN → BASE_DOMAIN), then `migrate_host_ip` (from Plan 025, adds HOST_IP if missing), then `migrate_caddy_binary` (replaces Caddy binary), then `migrate_caddy_config` (writes placeholder Caddyfile), then `start_service` (scaleboxd generates real Caddyfile on startup).
 
 ### Verification
 
@@ -1339,12 +1382,12 @@ In the Deployment Topology server-side table, change Caddy row:
 
 ### Glossary changes:
 
-**Remove:**
-- "API Domain (API_DOMAIN)" entry
-- "VM Domain (VM_DOMAIN)" entry
-- "On-Demand TLS" entry
+**Remove** (all in the "Access Terms" section):
+- "API Domain (API_DOMAIN)" entry (line 66)
+- "VM Domain (VM_DOMAIN)" entry (line 69)
+- "On-Demand TLS" entry (line 76)
 
-**Add/Replace with:**
+**Add** the following entries to the "Access Terms" section, replacing the removed entries. Place "Base Domain" where "API Domain" was, and the others after it:
 
 ```markdown
 ### Base Domain (BASE_DOMAIN)
@@ -1355,6 +1398,8 @@ Requires an NS record delegating `{base-domain}` to the Scalebox host.
 
 ### DNS Server
 In-process authoritative DNS server (port 53) that handles the `{BASE_DOMAIN}` zone. Responds to A queries for all subdomains with the host IP, and serves TXT records for ACME DNS-01 challenges. Uses the `dns2` npm package.
+
+**Note:** Place this entry in the "Infrastructure Terms" section (after "Firecracker" and "Kernel" entries, before "Socket Path").
 
 ### Wildcard Certificate
 A single TLS certificate covering `*.vm.{BASE_DOMAIN}`, obtained via DNS-01 challenge. Replaces per-VM certificate issuance (on-demand TLS), eliminating Let's Encrypt rate limiting.
@@ -1398,8 +1443,13 @@ Record the architectural decision to switch from HTTP-01 per-VM certificates to 
 | File | Action | Details |
 |------|--------|---------|
 | `product/ADR/016-dns-wildcard-certificates.md` | Create | ADR documenting this decision |
+| `product/ADR/009-caddy-https-gateway.md` | Modify | Add "Partially superseded by ADR 016" to Status section |
 
-### ADR Content:
+### ADR 009 Update:
+
+Change the Status section of `product/ADR/009-caddy-https-gateway.md` from `Accepted` to `Accepted. Partially superseded by [ADR 016](016-dns-wildcard-certificates.md) — TLS mechanism changed from HTTP-01 on-demand to DNS-01 wildcard, but Caddy is still used as the HTTPS reverse proxy.`
+
+### ADR 016 Content:
 
 ```markdown
 # ADR 016: DNS-01 Wildcard Certificates with In-Process DNS Server
@@ -1486,6 +1536,7 @@ This is a one-time manual step, not a code change. The `./do check` script will 
 | `product/DDD/contexts/access.md` | Modify | Update HTTPS Gateway for DNS-01 architecture |
 | `product/DDD/context-map.md` | Modify | Add DNS Server to Access sub-contexts, file mapping |
 | `product/ADR/016-dns-wildcard-certificates.md` | Create | Decision record |
+| `product/ADR/009-caddy-https-gateway.md` | Modify | Mark as partially superseded |
 
 ---
 
@@ -1516,3 +1567,4 @@ How will this feature behave when updating from an older version?
 - **Migration needed**: Yes — `scalebox-update` migrates config file, replaces Caddy binary, and rewrites Caddyfile. The `scaleboxd` process generates the real Caddy config on startup.
 - **Backwards compatibility**: Breaking change for API response (`/info` returns `base_domain` instead of `api_domain`/`vm_domain`). The `sb` CLI reads `api_domain` in the status command — updated in this plan. VM URLs change from `https://{name}.{VM_DOMAIN}` to `https://{name}.vm.{BASE_DOMAIN}`.
 - **DNS setup change**: Users must switch from wildcard A record to NS record (or reconfigure with new subdomain structure). This requires manual user action during update.
+- **Dead code**: After both Plan 025 and Plan 026, `getHostIp()` in `src/services/system.ts` is no longer called from anywhere. It can be removed in a future cleanup.
