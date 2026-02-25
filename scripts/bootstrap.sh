@@ -6,7 +6,7 @@
 #   curl -sSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/bootstrap.sh | sudo bash
 #
 # Or with domains pre-set:
-#   curl -sSL ... | sudo API_DOMAIN=api.example.com VM_DOMAIN=vms.example.com bash
+#   curl -sSL ... | sudo BASE_DOMAIN=scalebox.example.com bash
 #
 set -euo pipefail
 
@@ -79,29 +79,19 @@ configure() {
   echo -e "${BLUE}╚═══════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
-  # API_DOMAIN - for API HTTPS access
-  if [[ -z "${API_DOMAIN:-}" ]]; then
-    echo "Scalebox needs a domain for HTTPS access to the API."
-    echo "This domain should have a DNS A record pointing to this server."
+  if [[ -z "${BASE_DOMAIN:-}" ]]; then
+    echo "Scalebox needs a base domain for HTTPS access."
+    echo "This domain should have an NS record pointing to this server."
+    echo ""
+    echo "The API will be at:  api.{base-domain}"
+    echo "VMs will be at:      {vm-name}.vm.{base-domain}"
     echo ""
     echo "Example: scalebox.example.com"
     echo ""
-    API_DOMAIN=$(prompt "Enter API domain (or press Enter to skip HTTPS)")
+    BASE_DOMAIN=$(prompt "Enter base domain (or press Enter to skip HTTPS)")
   fi
 
-  # VM_DOMAIN - for VM HTTPS access (optional)
-  if [[ -z "${VM_DOMAIN:-}" ]]; then
-    echo ""
-    echo "Optionally, configure a domain for VM HTTPS access."
-    echo "VMs will be accessible at https://{vm-name}.{vm-domain}"
-    echo "Requires a wildcard DNS record: *.vms.example.com -> this server"
-    echo ""
-    echo "Example: vms.example.com -> https://happy-red-panda.vms.example.com"
-    echo ""
-    VM_DOMAIN=$(prompt "Enter VM domain (optional, press Enter to skip)")
-  fi
-
-  # HOST_IP - external IP for API responses
+  # HOST_IP - external IP for API responses (from Plan 025)
   if [[ -z "${HOST_IP:-}" ]]; then
     local detected_ip
     detected_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -156,9 +146,13 @@ run_installer() {
   echo ""
 
   # Export config for install.sh
-  export API_DOMAIN="${API_DOMAIN:-}"
-  export VM_DOMAIN="${VM_DOMAIN:-}"
+  export BASE_DOMAIN="${BASE_DOMAIN:-}"
   export HOST_IP="${HOST_IP:-}"
+  # Backward compatibility: old install.sh scripts use API_DOMAIN and VM_DOMAIN.
+  # When check-update bootstraps with the old release tarball, the old install.sh
+  # reads these vars. Derive them from BASE_DOMAIN for backward compat.
+  export API_DOMAIN="${BASE_DOMAIN:+api.$BASE_DOMAIN}"
+  export VM_DOMAIN="${BASE_DOMAIN:+vm.$BASE_DOMAIN}"
   export INSTALL_DIR
 
   # Run install.sh
@@ -178,7 +172,7 @@ main() {
   check_deps
 
   # Interactive config if not pre-set
-  if [[ -z "${API_DOMAIN:-}" && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
+  if [[ ( -z "${BASE_DOMAIN:-}" || -z "${HOST_IP:-}" ) && -z "${SCALEBOX_NONINTERACTIVE:-}" ]]; then
     configure
   fi
 

@@ -158,16 +158,20 @@ log_user 1
 spawn sudo bash -c "SCALEBOX_RELEASE_URL='$tarball_url' ACME_STAGING=true HOST_IP='$VM_IP' bash /tmp/bootstrap.sh"
 
 expect {
-    "Enter API domain (or press Enter to skip HTTPS): " {
+    "Enter base domain (or press Enter to skip HTTPS)" {
         send "$VM_FQDN\r"
-        exp_continue
-    }
-    "Enter VM domain (optional, press Enter to skip): " {
-        send "\r"
         exp_continue
     }
     "Enter host IP" {
         send "$VM_IP\r"
+        exp_continue
+    }
+    "Enter API domain (or press Enter to skip HTTPS)" {
+        send "api.$VM_FQDN\r"
+        exp_continue
+    }
+    "Enter VM domain (optional, press Enter to skip)" {
+        send "vm.$VM_FQDN\r"
         exp_continue
     }
     timeout {
@@ -217,14 +221,40 @@ get_api_token() {
 
 create_dns_record() {
   VM_FQDN="${VM_NAME}.${DNS_SUFFIX}"
-  echo "==> Creating DNS record: ${VM_FQDN} -> ${VM_IP}"
+  echo "==> Creating DNS records: ${VM_FQDN} -> ${VM_IP}"
 
+  # Create A record for the host (used as BASE_DOMAIN by bootstrap)
   gcloud dns record-sets create "${VM_FQDN}." \
     --zone="$DNS_ZONE" \
     --project="$GCLOUD_PROJECT" \
     --type=A \
     --ttl=60 \
     --rrdatas="$VM_IP"
+
+  # Create wildcard A record for subdomains (api.X, *.vm.X, etc.)
+  gcloud dns record-sets create "*.${VM_FQDN}." \
+    --zone="$DNS_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --type=A \
+    --ttl=60 \
+    --rrdatas="$VM_IP"
+
+  # Delegate ACME challenge subdomains to the Scalebox DNS server.
+  # This enables DNS-01 challenge validation: Let's Encrypt queries
+  # _acme-challenge.{X}.{VM_FQDN} → NS delegation → Scalebox DNS → TXT record.
+  gcloud dns record-sets create "_acme-challenge.api.${VM_FQDN}." \
+    --zone="$DNS_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --type=NS \
+    --ttl=60 \
+    --rrdatas="${VM_FQDN}."
+
+  gcloud dns record-sets create "_acme-challenge.vm.${VM_FQDN}." \
+    --zone="$DNS_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --type=NS \
+    --ttl=60 \
+    --rrdatas="${VM_FQDN}."
 
   echo "==> Waiting for DNS propagation..."
   local retries=30
@@ -241,11 +271,26 @@ create_dns_record() {
 
 delete_dns_record() {
   if [[ -n "$VM_NAME" && -n "$DNS_SUFFIX" ]]; then
-    echo "==> Deleting DNS record: ${VM_NAME}.${DNS_SUFFIX}"
+    echo "==> Deleting DNS records: ${VM_NAME}.${DNS_SUFFIX}"
     gcloud dns record-sets delete "${VM_NAME}.${DNS_SUFFIX}." \
       --zone="$DNS_ZONE" \
       --project="$GCLOUD_PROJECT" \
       --type=A \
+      --quiet 2>/dev/null || true
+    gcloud dns record-sets delete "*.${VM_NAME}.${DNS_SUFFIX}." \
+      --zone="$DNS_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --type=A \
+      --quiet 2>/dev/null || true
+    gcloud dns record-sets delete "_acme-challenge.api.${VM_NAME}.${DNS_SUFFIX}." \
+      --zone="$DNS_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --type=NS \
+      --quiet 2>/dev/null || true
+    gcloud dns record-sets delete "_acme-challenge.vm.${VM_NAME}.${DNS_SUFFIX}." \
+      --zone="$DNS_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --type=NS \
       --quiet 2>/dev/null || true
   fi
 }
@@ -375,7 +420,7 @@ check_firewall_rule() {
     echo ""
     echo "  gcloud compute firewall-rules create scalebox-test-allow \\"
     echo "    --project=$GCLOUD_PROJECT \\"
-    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000 \\"
+    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000,tcp:53,udp:53 \\"
     echo "    --target-tags=scalebox-test \\"
     echo "    --description='Allow traffic to Scalebox test VMs'"
     echo ""
@@ -403,6 +448,11 @@ check_firewall_rule() {
     missing_ports+=("tcp:22001-32000 (SSH proxy)")
   fi
 
+  # Check for DNS server (53)
+  if [[ "$rule_config" != *"53"* ]]; then
+    missing_ports+=("tcp:53,udp:53 (DNS server)")
+  fi
+
   if [[ ${#missing_ports[@]} -gt 0 ]]; then
     echo ""
     echo "ERROR: Firewall rule is missing required ports:"
@@ -414,7 +464,7 @@ check_firewall_rule() {
     echo ""
     echo "  gcloud compute firewall-rules update scalebox-test-allow \\"
     echo "    --project=$GCLOUD_PROJECT \\"
-    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000"
+    echo "    --allow=tcp:443,tcp:8080,tcp:22001-32000,tcp:53,udp:53"
     echo ""
     die "Firewall rule misconfigured"
   fi
@@ -639,8 +689,8 @@ do_check() {
   token=$(get_api_token)
   [[ -n "$token" ]] || die "Failed to get API token"
 
-  echo "==> Running tests against https://$VM_FQDN..."
-  if ! NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
+  echo "==> Running tests against https://api.$VM_FQDN..."
+  if ! NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" VM_IP="$VM_IP" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test; then
     echo "==> Tests FAILED. Capturing debug info..."
 
     echo "==> scaleboxd logs after test failure:"
@@ -743,7 +793,7 @@ do_check_update() {
     gcloud compute ssh "$VM_NAME" \
       --zone="$GCLOUD_ZONE" \
       --project="$GCLOUD_PROJECT" \
-      --command="curl -v https://$VM_FQDN/health 2>&1 | head -50" \
+      --command="curl -v https://api.$VM_FQDN/health 2>&1 | head -50" \
       --quiet || true
 
     exit 1
@@ -792,7 +842,7 @@ do_check_update() {
   token=$(get_api_token)
 
   echo "==> Running integration tests against updated system..."
-  NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
+  NODE_TLS_REJECT_UNAUTHORIZED=0 VM_HOST="$VM_FQDN" VM_IP="$VM_IP" USE_HTTPS=true API_TOKEN="$token" "$BUN_BIN" test
 
   echo "==> check-update: PASSED (last release → current build)"
 }

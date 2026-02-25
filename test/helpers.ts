@@ -8,9 +8,10 @@ const FIXTURES_DIR = join(import.meta.dir, "fixtures");
 
 // Configuration
 export const VM_HOST = process.env.VM_HOST || "localhost";
+export const VM_IP = process.env.VM_IP || "";
 export const API_PORT = process.env.API_PORT || "8080";
 export const USE_HTTPS = process.env.USE_HTTPS === "true";
-export const API_BASE_URL = USE_HTTPS ? `https://${VM_HOST}` : `http://${VM_HOST}:${API_PORT}`;
+export const API_BASE_URL = USE_HTTPS ? `https://api.${VM_HOST}` : `http://${VM_HOST}:${API_PORT}`;
 export const API_TOKEN = process.env.API_TOKEN || "dev-token";
 
 // SSH
@@ -19,17 +20,35 @@ export const TEST_PRIVATE_KEY_PATH = join(FIXTURES_DIR, "test_key");
 chmodSync(TEST_PRIVATE_KEY_PATH, 0o600);
 export const TEST_PUBLIC_KEY = readFileSync(join(FIXTURES_DIR, "test_key.pub"), "utf-8").trim();
 
+// Custom fetch wrapper that bypasses DNS when VM_IP is set
+async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
+	if (VM_IP && USE_HTTPS) {
+		// Connect to VM_IP directly, bypassing DNS
+		const url = `https://${VM_IP}:443${path}`;
+		const apiHost = `api.${VM_HOST}`;
+		return fetch(url, {
+			...options,
+			headers: {
+				...Object.fromEntries(Object.entries(options.headers || {})),
+				Host: apiHost,
+			},
+			tls: { rejectUnauthorized: false },
+		} as RequestInit);
+	}
+	return fetch(`${API_BASE_URL}${path}`, options);
+}
+
 // HTTP API client (kept for auth tests and cleanup)
 export const api = {
 	async delete(path: string) {
-		const res = await fetch(`${API_BASE_URL}${path}`, {
+		const res = await apiFetch(path, {
 			method: "DELETE",
 			headers: { Authorization: `Bearer ${API_TOKEN}` },
 		});
 		return { status: res.status };
 	},
 	async getRaw(path: string, token?: string) {
-		const res = await fetch(`${API_BASE_URL}${path}`, {
+		const res = await apiFetch(path, {
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
 		});
 		return { status: res.status };
@@ -94,8 +113,19 @@ function getSbPath(): string {
 export async function initCli(): Promise<void> {
 	cliConfigDir = await mkdtemp(join(tmpdir(), "scalebox-test-"));
 	const host = `${API_BASE_URL}`;
+	// When VM_IP is set, use direct IP connection to bypass DNS propagation delays.
+	// The sb CLI uses curl, which can use --resolve to map hostnames to IPs.
+	const apiHost = USE_HTTPS ? `api.${VM_HOST}` : VM_HOST;
+	const resolveFlag = VM_IP && USE_HTTPS ? `--resolve ${apiHost}:443:${VM_IP}` : "";
+	const env: Record<string, string> = {
+		SCALEBOX_INSECURE: "1",
+		SCALEBOX_CONFIG_DIR: cliConfigDir,
+	};
+	if (resolveFlag) {
+		env.SCALEBOX_CURL_FLAGS = resolveFlag;
+	}
 	const result = await $`echo ${API_TOKEN} | ${getSbPath()} login --host ${host} --token-stdin`
-		.env({ SCALEBOX_INSECURE: "1", SCALEBOX_CONFIG_DIR: cliConfigDir })
+		.env(env)
 		.quiet();
 	if (result.exitCode !== 0) {
 		throw new Error(`sb login failed: ${result.stderr.toString()}`);
@@ -119,10 +149,17 @@ export async function sbCmd(
 	}
 	const configDir = cliConfigDir; // Local variable for type narrowing
 
-	const result = await $`${getSbPath()} --json ${args}`
-		.env({ SCALEBOX_INSECURE: "1", SCALEBOX_CONFIG_DIR: configDir })
-		.quiet()
-		.nothrow();
+	const apiHost = USE_HTTPS ? `api.${VM_HOST}` : VM_HOST;
+	const resolveFlag = VM_IP && USE_HTTPS ? `--resolve ${apiHost}:443:${VM_IP}` : "";
+	const env: Record<string, string> = {
+		SCALEBOX_INSECURE: "1",
+		SCALEBOX_CONFIG_DIR: configDir,
+	};
+	if (resolveFlag) {
+		env.SCALEBOX_CURL_FLAGS = resolveFlag;
+	}
+
+	const result = await $`${getSbPath()} --json ${args}`.env(env).quiet().nothrow();
 
 	const stdout = result.stdout.toString().trim();
 	const stderr = result.stderr.toString().trim();

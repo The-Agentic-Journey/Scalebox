@@ -325,7 +325,7 @@ export async function deleteVm(vm: VM): Promise<void> {
 }
 
 export function vmToResponse(vm: VM): VMResponse {
-	const url = config.vmDomain ? `https://${vm.name}.${config.vmDomain}` : null;
+	const url = config.baseDomain ? `https://${vm.name}.vm.${config.baseDomain}` : null;
 	return {
 		id: vm.id,
 		name: vm.name,

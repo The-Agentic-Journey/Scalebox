@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded by ADR 016
+
+**Note**: Superseded by [ADR 016](016-dns01-wildcard-certificates.md) which replaces per-VM HTTP-01 with DNS-01 wildcard certificates.
 
 ## Context
 
