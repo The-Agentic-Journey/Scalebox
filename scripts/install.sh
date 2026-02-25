@@ -14,8 +14,8 @@ INSTALL_DIR="${INSTALL_DIR:-$SCRIPT_DIR}"
 DATA_DIR="${DATA_DIR:-/var/lib/scalebox}"
 API_PORT="${API_PORT:-8080}"
 API_TOKEN="${API_TOKEN:-}"
-API_DOMAIN="${API_DOMAIN:-}"
-VM_DOMAIN="${VM_DOMAIN:-}"
+BASE_DOMAIN="${BASE_DOMAIN:-}"
+ACME_PROXY_PASSWORD="${ACME_PROXY_PASSWORD:-}"
 ACME_STAGING="${ACME_STAGING:-false}"
 HOST_IP="${HOST_IP:-}"
 
@@ -257,59 +257,75 @@ create_rootfs() {
   build_debian_base "$DATA_DIR"
 }
 
+# === Free Port 53 for Scalebox DNS Server ===
+free_port_53() {
+  if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    log "Disabling systemd-resolved to free port 53 for Scalebox DNS..."
+    systemctl stop systemd-resolved
+    systemctl disable systemd-resolved
+    rm -f /etc/resolv.conf
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+  fi
+}
+
 # === Install Caddy (HTTPS reverse proxy) ===
 install_caddy() {
-  [[ -n "$API_DOMAIN" || -n "$VM_DOMAIN" ]] || return 0
+  [[ -n "$BASE_DOMAIN" ]] || return 0
 
-  log "Installing Caddy..."
-  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/caddy.gpg
-  echo "deb [signed-by=/usr/share/keyrings/caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" > /etc/apt/sources.list.d/caddy.list
-  apt-get update -qq
-  apt-get install -y -qq caddy
+  free_port_53
 
-  # Create vms.caddy stub file (managed by scaleboxd at runtime)
+  log "Installing Caddy with acmeproxy module..."
+
+  # Download custom Caddy binary with acmeproxy DNS module
+  local caddy_url="https://caddyserver.com/api/download?os=linux&arch=$(dpkg --print-architecture)&p=github.com/caddy-dns/acmeproxy"
+  curl -sSL "$caddy_url" -o /usr/bin/caddy
+  chmod +x /usr/bin/caddy
+
+  # Create caddy user/group if needed (normally done by apt package)
+  if ! id caddy &>/dev/null; then
+    groupadd --system caddy 2>/dev/null || true
+    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
+  fi
+
+  # Create config directory
+  mkdir -p /etc/caddy
+
+  # Install systemd unit for Caddy (if not already present)
+  if [[ ! -f /etc/systemd/system/caddy.service ]]; then
+    cat > /etc/systemd/system/caddy.service <<'CADDYSERVICEEOF'
+[Unit]
+Description=Caddy
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+CADDYSERVICEEOF
+    systemctl daemon-reload
+  fi
+
+  # Write minimal placeholder Caddyfile (scaleboxd generates the real one on startup)
+  cat > /etc/caddy/Caddyfile <<'CADDYEOF'
+# Placeholder - scaleboxd generates the real config on startup
+{
+}
+CADDYEOF
+
+  # Create vms.caddy stub
   cat > /etc/caddy/vms.caddy <<'VMSCADDYEOF'
 # Managed by scaleboxd - do not edit manually
-# VM routes will be generated on scaleboxd startup
 VMSCADDYEOF
-
-  # Start Caddyfile with global options
-  if [[ "$ACME_STAGING" == "true" ]]; then
-    cat > /etc/caddy/Caddyfile <<'CADDYEOF'
-{
-    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
-    on_demand_tls {
-        ask http://localhost:8080/caddy/check
-    }
-}
-CADDYEOF
-  else
-    cat > /etc/caddy/Caddyfile <<'CADDYEOF'
-{
-    on_demand_tls {
-        ask http://localhost:8080/caddy/check
-    }
-}
-CADDYEOF
-  fi
-
-  # Add main API domain if set
-  if [[ -n "$API_DOMAIN" ]]; then
-      log "Configuring Caddy for $API_DOMAIN..."
-      cat >> /etc/caddy/Caddyfile <<EOF
-
-$API_DOMAIN {
-    reverse_proxy localhost:$API_PORT
-}
-EOF
-  fi
-
-  # Add import for VM routes (managed by scaleboxd)
-  cat >> /etc/caddy/Caddyfile <<'CADDYEOF'
-
-import /etc/caddy/vms.caddy
-CADDYEOF
 
   systemctl enable caddy
   systemctl restart caddy
@@ -317,7 +333,7 @@ CADDYEOF
 
 # === Wait for HTTPS Certificate ===
 wait_for_https() {
-  [[ -n "$API_DOMAIN" ]] || return 0
+  [[ -n "$BASE_DOMAIN" ]] || return 0
 
   log "Waiting for HTTPS certificate..."
   local max_retries=60
@@ -329,7 +345,7 @@ wait_for_https() {
     curl_opts="-sf"
   fi
   while [[ $attempt -le $max_retries ]]; do
-    if curl $curl_opts "https://$API_DOMAIN/health" &>/dev/null; then
+    if curl $curl_opts --resolve "api.$BASE_DOMAIN:443:127.0.0.1" "https://api.$BASE_DOMAIN/health" &>/dev/null; then
       log "HTTPS is ready"
       return 0
     fi
@@ -346,10 +362,10 @@ wait_for_https() {
   echo "=== HTTPS Certificate Debug Info ==="
   echo ""
   echo "--- DNS Resolution ---"
-  host "$API_DOMAIN" 2>&1 || echo "(host command failed)"
+  host "api.$BASE_DOMAIN" 2>&1 || echo "(host command failed)"
   echo ""
   echo "--- Curl Error ---"
-  curl -v "https://$API_DOMAIN/health" 2>&1 | head -50 || true
+  curl -v --resolve "api.$BASE_DOMAIN:443:127.0.0.1" "https://api.$BASE_DOMAIN/health" 2>&1 | head -50 || true
   echo ""
   echo "--- Caddy Service Status ---"
   systemctl status caddy --no-pager 2>&1 | head -20 || true
@@ -366,7 +382,7 @@ wait_for_https() {
   echo "=== End Debug Info ==="
   echo ""
 
-  die "Failed to obtain TLS certificate for $API_DOMAIN"
+  die "Failed to obtain TLS certificate for api.$BASE_DOMAIN"
 }
 
 # === Install Scalebox Binary ===
@@ -436,6 +452,12 @@ install_service() {
   fi
   [[ -z "$API_TOKEN" ]] && API_TOKEN="sb-$(openssl rand -hex 24)"
 
+  # Generate ACME proxy password if not set
+  if [[ -z "$ACME_PROXY_PASSWORD" && -f /etc/scaleboxd/config ]]; then
+    ACME_PROXY_PASSWORD=$(grep -E "^ACME_PROXY_PASSWORD=" /etc/scaleboxd/config 2>/dev/null | cut -d= -f2- || true)
+  fi
+  [[ -z "$ACME_PROXY_PASSWORD" ]] && ACME_PROXY_PASSWORD="$(openssl rand -hex 32)"
+
   # Write config with restricted permissions (token is sensitive)
   # Use umask to prevent brief window where file is world-readable
   (
@@ -445,10 +467,10 @@ API_PORT=$API_PORT
 API_TOKEN=$API_TOKEN
 DATA_DIR=$DATA_DIR
 KERNEL_PATH=$DATA_DIR/kernel/vmlinux
-API_DOMAIN=$API_DOMAIN
-VM_DOMAIN=$VM_DOMAIN
-ACME_STAGING=$ACME_STAGING
+BASE_DOMAIN=$BASE_DOMAIN
 HOST_IP=$HOST_IP
+ACME_PROXY_PASSWORD=$ACME_PROXY_PASSWORD
+ACME_STAGING=$ACME_STAGING
 EOF
   )
 
@@ -517,22 +539,20 @@ main() {
   install_binary
   install_scripts
   install_service
-  start_service
   install_caddy
+  start_service
   wait_for_https
 
   echo ""
   log "Installation complete!"
   echo ""
-  if [[ -n "$API_DOMAIN" ]]; then
-    echo "  API: https://$API_DOMAIN"
+  if [[ -n "$BASE_DOMAIN" ]]; then
+    echo "  API: https://api.$BASE_DOMAIN"
+    echo "  VM URLs: https://{vm-name}.vm.$BASE_DOMAIN"
   else
     echo "  API: http://$(hostname -I | awk '{print $1}'):$API_PORT"
   fi
   echo "  Token: $API_TOKEN"
-  if [[ -n "$VM_DOMAIN" ]]; then
-      echo "  VM URLs: https://{vm-name}.$VM_DOMAIN"
-  fi
   echo ""
   echo "  Server commands:"
   echo "    systemctl status scaleboxd"
