@@ -108,10 +108,11 @@ api() {
   local response http_code
   local insecure_flag=""
   [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
+  local extra_flags="${SCALEBOX_CURL_FLAGS:-}"
 
   # Capture both response body and HTTP status code
   # Note: Don't use -f flag as it prevents capturing error response bodies
-  response=$(curl $insecure_flag -s -w "\n%{http_code}" -X "$method" \
+  response=$(curl $insecure_flag $extra_flags -s -w "\n%{http_code}" -X "$method" \
     -H "Authorization: Bearer $SCALEBOX_TOKEN" \
     -H "Content-Type: application/json" \
     "$@" "${SCALEBOX_HOST}${path}" 2>/dev/null)
@@ -230,7 +231,8 @@ cmd_login() {
   echo "Testing connection..."
   local insecure_flag=""
   [[ "${SCALEBOX_INSECURE:-}" == "1" ]] && insecure_flag="-k"
-  if ! curl $insecure_flag -sf -H "Authorization: Bearer $token" "$host/health" >/dev/null 2>&1; then
+  local extra_flags="${SCALEBOX_CURL_FLAGS:-}"
+  if ! curl $insecure_flag $extra_flags -sf -H "Authorization: Bearer $token" "$host/health" >/dev/null 2>&1; then
     die "Failed to connect to $host. Check the URL and token."
   fi
 
@@ -305,7 +307,7 @@ cmd_status() {
       echo "==============="
       echo ""
       echo "Host: $(echo "$response" | jq -r '.host_ip')"
-      echo "API:  $(echo "$response" | jq -r '.api_domain // "N/A"')"
+      echo "Domain: $(echo "$response" | jq -r '.base_domain // "N/A"')"
       echo ""
       echo "Resources:"
       echo "  Templates: $(echo "$response" | jq -r '.templates_count')"
@@ -482,9 +484,13 @@ cmd_vm_wait() {
   vm_data=$(api GET "/vms/$id") || die "VM not found: $id"
   ssh_port=$(echo "$vm_data" | jq -r '.ssh_port')
 
-  # Extract host from SCALEBOX_HOST (remove protocol and port)
+  # Use the VM's ip field for SSH connection (avoids DNS dependency)
   local ssh_host
-  ssh_host=$(echo "$SCALEBOX_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||')
+  ssh_host=$(echo "$vm_data" | jq -r '.ip // empty')
+  if [[ -z "$ssh_host" ]]; then
+    # Fallback: extract host from SCALEBOX_HOST (remove protocol and port)
+    ssh_host=$(echo "$SCALEBOX_HOST" | sed -E 's|^https?://||; s|:[0-9]+$||')
+  fi
 
   local start=$SECONDS
   while (( SECONDS - start < timeout )); do

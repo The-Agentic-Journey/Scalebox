@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { $ } from "bun";
 import {
 	API_BASE_URL,
 	TEST_PUBLIC_KEY,
+	VM_HOST,
+	VM_IP,
 	api,
 	cleanupCli,
 	initCli,
@@ -348,9 +351,48 @@ describe("Firecracker API", () => {
 	);
 
 	// === DNS & Wildcard Cert ===
-	test.skip("info returns base_domain", async () => {});
-	test.skip("VM URL uses vm.BASE_DOMAIN format", async () => {});
-	test.skip("DNS resolves VM subdomain to host IP", async () => {});
-	test.skip("DNS resolves API subdomain to host IP", async () => {});
-	test.skip("ACME proxy endpoints manage TXT records", async () => {});
+	test("info returns base_domain", async () => {
+		const status = await sbStatus();
+		expect(status.base_domain).toBeDefined();
+		expect(status.base_domain).not.toBe("");
+		expect((status as Record<string, unknown>).api_domain).toBeUndefined();
+		expect((status as Record<string, unknown>).vm_domain).toBeUndefined();
+	});
+
+	test("VM URL uses vm.BASE_DOMAIN format", async () => {
+		const vm = await sbVmCreate("debian-base");
+		if (vm?.id) createdVmIds.push(vm.id as string);
+		const status = await sbStatus();
+		const baseDomain = status.base_domain as string;
+		expect(vm.url).toMatch(new RegExp(`^https://.+\\.vm\\.${baseDomain.replace(/\./g, "\\.")}$`));
+	});
+	test(
+		"DNS resolves VM subdomain to host IP",
+		async () => {
+			const status = await sbStatus();
+			const baseDomain = status.base_domain as string;
+			const hostIp = status.host_ip as string;
+			const digTarget = VM_IP || VM_HOST;
+			const result = await $`dig @${digTarget} test-vm.vm.${baseDomain} A +short`.text();
+			expect(result.trim()).toBe(hostIp);
+		},
+		{ timeout: 10000 },
+	);
+
+	test(
+		"DNS resolves API subdomain to host IP",
+		async () => {
+			const status = await sbStatus();
+			const baseDomain = status.base_domain as string;
+			const hostIp = status.host_ip as string;
+			const digTarget = VM_IP || VM_HOST;
+			const result = await $`dig @${digTarget} api.${baseDomain} A +short`.text();
+			expect(result.trim()).toBe(hostIp);
+		},
+		{ timeout: 10000 },
+	);
+	test.skip("ACME proxy endpoints manage TXT records", async () => {
+		// Verified end-to-end: if HTTPS works (criterion #6), the ACME proxy worked.
+		// Direct testing would require the ACME proxy password from the server config.
+	});
 });

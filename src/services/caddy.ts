@@ -6,27 +6,36 @@ import { vms } from "./vm";
 
 const exec = promisify(execCallback);
 
+const CADDYFILE = "/etc/caddy/Caddyfile";
+const CADDYFILE_TMP = "/etc/caddy/Caddyfile.tmp";
 const VMSFILE = "/etc/caddy/vms.caddy";
 const VMSFILE_TMP = "/etc/caddy/vms.caddy.tmp";
 
 export async function updateCaddyConfig(): Promise<void> {
-	// Build content
-	const content = buildVmsCaddyContent();
-
-	// Read current content for potential rollback
-	let previousContent: string | null = null;
-	try {
-		previousContent = await readFile(VMSFILE, "utf-8");
-	} catch {
-		// File doesn't exist yet, no rollback needed
+	if (!config.baseDomain) {
+		return;
 	}
 
-	// Atomic write: write to .tmp then rename
+	const caddyfileContent = buildCaddyfileContent();
+	const vmsContent = buildVmsCaddyContent();
+
+	// Read current content for potential rollback
+	let previousCaddyfile: string | null = null;
+	let previousVmsFile: string | null = null;
 	try {
-		await writeFile(VMSFILE_TMP, content);
+		previousCaddyfile = await readFile(CADDYFILE, "utf-8");
+		previousVmsFile = await readFile(VMSFILE, "utf-8");
+	} catch {
+		// Files don't exist yet
+	}
+
+	// Atomic write both files
+	try {
+		await writeFile(CADDYFILE_TMP, caddyfileContent);
+		await rename(CADDYFILE_TMP, CADDYFILE);
+		await writeFile(VMSFILE_TMP, vmsContent);
 		await rename(VMSFILE_TMP, VMSFILE);
 	} catch (error) {
-		// Directory may not exist if Caddy is not installed yet
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 			console.log(
 				"Skipping Caddy config update: /etc/caddy/ directory does not exist (Caddy may not be installed yet)",
@@ -41,42 +50,81 @@ export async function updateCaddyConfig(): Promise<void> {
 		await exec("systemctl reload caddy");
 	} catch (error) {
 		// Rollback on failure
-		if (previousContent !== null) {
-			await writeFile(VMSFILE, previousContent);
+		if (previousCaddyfile !== null) {
+			await writeFile(CADDYFILE, previousCaddyfile);
 		}
-		console.error("Caddy reload failed, rolled back vms.caddy:", error);
-		// Don't throw - VM operation should still succeed
+		if (previousVmsFile !== null) {
+			await writeFile(VMSFILE, previousVmsFile);
+		}
+		console.error("Caddy reload failed, rolled back config:", error);
 	}
 }
 
-function buildVmsCaddyContent(): string {
-	if (!config.vmDomain) {
-		return `# Managed by scaleboxd - do not edit manually
-# VM routes are added here when VM_DOMAIN is configured
-`;
-	}
+function buildCaddyfileContent(): string {
+	const apiDomain = `api.${config.baseDomain}`;
+	const vmWildcard = `*.vm.${config.baseDomain}`;
+	const acmeEndpoint = `http://localhost:${config.apiPort}/dns`;
 
-	// Build VM-specific routes
-	const vmRoutes = Array.from(vms.values())
-		.map((vm) => {
-			return `	@${vm.name} host ${vm.name}.${config.vmDomain}
-	handle @${vm.name} {
-		reverse_proxy ${vm.ip}:8080
-	}`;
-		})
-		.join("\n\n");
+	let globalBlock: string;
+	if (config.acmeStaging) {
+		globalBlock = `{
+	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}`;
+	} else {
+		globalBlock = "{}";
+	}
 
 	return `# Managed by scaleboxd - do not edit manually
-*.${config.vmDomain} {
+${globalBlock}
+
+${apiDomain} {
 	tls {
-		on_demand
+		dns acmeproxy {
+			endpoint ${acmeEndpoint}
+			username caddy
+			password ${config.acmeProxyPassword}
+		}
+		resolvers 127.0.0.1
+	}
+	reverse_proxy localhost:${config.apiPort}
+}
+
+${vmWildcard} {
+	tls {
+		dns acmeproxy {
+			endpoint ${acmeEndpoint}
+			username caddy
+			password ${config.acmeProxyPassword}
+		}
+		resolvers 127.0.0.1
 	}
 
-${vmRoutes}
+	import /etc/caddy/vms.caddy
 
 	handle {
 		respond "VM not found" 404
 	}
 }
+`;
+}
+
+function buildVmsCaddyContent(): string {
+	if (!config.baseDomain) {
+		return `# Managed by scaleboxd - do not edit manually
+# VM routes are added here when BASE_DOMAIN is configured
+`;
+	}
+
+	const vmRoutes = Array.from(vms.values())
+		.map((vm) => {
+			return `@${vm.name} host ${vm.name}.vm.${config.baseDomain}
+handle @${vm.name} {
+	reverse_proxy ${vm.ip}:8080
+}`;
+		})
+		.join("\n\n");
+
+	return `# Managed by scaleboxd - do not edit manually
+${vmRoutes}
 `;
 }

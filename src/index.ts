@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
+import { deleteAcmeTxtRecord, setAcmeTxtRecord, startDnsServer } from "./services/dns";
 import { reconcileOrphans } from "./services/reconcile";
 import { getCpuUsage, getMemoryStats, getStorageStats } from "./services/system";
 import { deleteTemplate, listTemplates } from "./services/template";
@@ -37,8 +38,7 @@ app.get("/info", async (c) => {
 
 	return c.json({
 		host_ip: hostIp,
-		api_domain: config.apiDomain,
-		vm_domain: config.vmDomain,
+		base_domain: config.baseDomain,
 		templates_count: templates.length,
 		vms_count: vmList.length,
 		storage: {
@@ -54,23 +54,46 @@ app.get("/info", async (c) => {
 	});
 });
 
-// Caddy on-demand TLS validation (no auth required)
-app.get("/caddy/check", (c) => {
-	const domain = c.req.query("domain");
-	if (!domain || !config.vmDomain) {
-		return c.body(null, 404);
+// ACME proxy endpoints for Caddy DNS-01 challenge (basic auth, not bearer)
+app.post("/dns/present", async (c) => {
+	// Validate basic auth
+	const authHeader = c.req.header("Authorization");
+	if (!config.acmeProxyPassword || !authHeader) {
+		return c.body(null, 401);
+	}
+	const expected = `Basic ${btoa(`caddy:${config.acmeProxyPassword}`)}`;
+	if (authHeader !== expected) {
+		return c.body(null, 401);
 	}
 
-	// Extract VM name from subdomain (e.g., "very-silly-penguin" from "very-silly-penguin.vms.example.com")
-	const suffix = `.${config.vmDomain}`;
-	if (!domain.endsWith(suffix)) {
-		return c.body(null, 404);
+	const body = await c.req.json<{ fqdn: string; value: string }>();
+	if (!body.fqdn || !body.value) {
+		return c.json({ error: "fqdn and value required" }, 400);
 	}
 
-	const vmName = domain.slice(0, -suffix.length);
-	const vmExists = Array.from(vms.values()).some((vm) => vm.name === vmName);
+	setAcmeTxtRecord(body.fqdn, body.value);
+	console.log(`DNS: Set TXT record for ${body.fqdn}`);
+	return c.json({ fqdn: body.fqdn, value: body.value });
+});
 
-	return vmExists ? c.body(null, 200) : c.body(null, 404);
+app.post("/dns/cleanup", async (c) => {
+	const authHeader = c.req.header("Authorization");
+	if (!config.acmeProxyPassword || !authHeader) {
+		return c.body(null, 401);
+	}
+	const expected = `Basic ${btoa(`caddy:${config.acmeProxyPassword}`)}`;
+	if (authHeader !== expected) {
+		return c.body(null, 401);
+	}
+
+	const body = await c.req.json<{ fqdn: string; value: string }>();
+	if (!body.fqdn || !body.value) {
+		return c.json({ error: "fqdn and value required" }, 400);
+	}
+
+	deleteAcmeTxtRecord(body.fqdn);
+	console.log(`DNS: Cleared TXT record for ${body.fqdn}`);
+	return c.json({ fqdn: body.fqdn, value: body.value });
 });
 
 // Protected routes require bearer token
@@ -174,6 +197,9 @@ await cleanupOrphanedUdpRules();
 // Recover VMs from previous run
 await recoverVms();
 await reconcileOrphans();
+
+// Start DNS server for domain resolution and ACME challenges
+await startDnsServer();
 
 // Initialize Caddy config on startup to ensure vms.caddy matches current VM state
 updateCaddyConfig().then(() => {
