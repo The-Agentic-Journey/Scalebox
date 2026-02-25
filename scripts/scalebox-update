@@ -346,7 +346,8 @@ CADDYSERVICEEOF
 
   systemctl daemon-reload
   systemctl enable caddy
-  systemctl restart caddy
+  # Don't start Caddy here — the placeholder config has no routes.
+  # scaleboxd will write the real Caddyfile and start/reload Caddy on startup.
 
   log "Caddy config migrated to scaleboxd-managed format"
 }

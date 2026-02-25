@@ -45,18 +45,22 @@ export async function updateCaddyConfig(): Promise<void> {
 		throw error;
 	}
 
-	// Reload Caddy
+	// Reload Caddy (fall back to restart if Caddy isn't running yet)
 	try {
 		await exec("systemctl reload caddy");
-	} catch (error) {
-		// Rollback on failure
-		if (previousCaddyfile !== null) {
-			await writeFile(CADDYFILE, previousCaddyfile);
+	} catch {
+		try {
+			await exec("systemctl restart caddy");
+		} catch (restartError) {
+			// Rollback on failure
+			if (previousCaddyfile !== null) {
+				await writeFile(CADDYFILE, previousCaddyfile);
+			}
+			if (previousVmsFile !== null) {
+				await writeFile(VMSFILE, previousVmsFile);
+			}
+			console.error("Caddy restart failed, rolled back config:", restartError);
 		}
-		if (previousVmsFile !== null) {
-			await writeFile(VMSFILE, previousVmsFile);
-		}
-		console.error("Caddy reload failed, rolled back config:", error);
 	}
 }
 

@@ -488,14 +488,15 @@ check_firewall_rule() {
 
 test_reconciliation() {
   local token=$1
-  # Use --resolve to bypass DNS propagation delays for API domain
-  local resolve_flag="--resolve api.$VM_FQDN:443:$VM_IP"
+  # Use HTTP via VM IP for reconciliation tests — avoids DNS/SSL/Caddy dependencies.
+  # These tests verify VM state persistence, not HTTPS connectivity.
+  local api="http://$VM_IP:8080"
 
   # --- Sub-test: VM survives restart ---
   echo "==> Test: VMs survive scaleboxd restart..."
 
   local create_result
-  create_result=$(curl -sk $resolve_flag -X POST "https://api.$VM_FQDN/vms" \
+  create_result=$(curl -sf -X POST "$api/vms" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
@@ -517,7 +518,7 @@ test_reconciliation() {
   echo "    Waiting for scaleboxd..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
-    if curl -sk $resolve_flag "https://api.$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+    if curl -sf "$api/health" >/dev/null 2>&1; then
       break
     fi
     sleep 2
@@ -527,13 +528,13 @@ test_reconciliation() {
 
   # Verify VM survived
   local list_after
-  list_after=$(curl -sk $resolve_flag "https://api.$VM_FQDN/vms" -H "Authorization: Bearer $token")
+  list_after=$(curl -sf "$api/vms" -H "Authorization: Bearer $token")
   echo "$list_after" | jq -e ".vms[] | select(.id == \"$vm_id\")" >/dev/null \
     || die "VM $vm_id not found after restart — VM did not survive"
   echo "    PASS: VM survived restart"
 
   # Clean up the test VM
-  curl -sk $resolve_flag -X DELETE "https://api.$VM_FQDN/vms/$vm_id" \
+  curl -sf -X DELETE "$api/vms/$vm_id" \
     -H "Authorization: Bearer $token" >/dev/null
 
   # --- Sub-test: Orphan cleanup ---
@@ -541,7 +542,7 @@ test_reconciliation() {
 
   # Create a VM (this will become an orphan)
   local orphan_result
-  orphan_result=$(curl -sk $resolve_flag -X POST "https://api.$VM_FQDN/vms" \
+  orphan_result=$(curl -sf -X POST "$api/vms" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
@@ -564,7 +565,7 @@ test_reconciliation() {
   echo "    Waiting for scaleboxd..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
-    if curl -sk $resolve_flag "https://api.$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+    if curl -sf "$api/health" >/dev/null 2>&1; then
       break
     fi
     sleep 2
@@ -577,7 +578,7 @@ test_reconciliation() {
 
   # Verify: no VMs listed (the orphan should have been cleaned up)
   local vm_count
-  vm_count=$(curl -sk $resolve_flag "https://api.$VM_FQDN/vms" -H "Authorization: Bearer $token" | jq '.vms | length')
+  vm_count=$(curl -sf "$api/vms" -H "Authorization: Bearer $token" | jq '.vms | length')
   [[ "$vm_count" == "0" ]] || die "Expected 0 VMs after orphan cleanup, got $vm_count"
   echo "    PASS: No VMs listed"
 
