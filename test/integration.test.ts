@@ -346,4 +346,11 @@ describe("Firecracker API", () => {
 		},
 		{ timeout: 90000 },
 	);
+
+	// === DNS & Wildcard Cert ===
+	test.skip("info returns base_domain", async () => {});
+	test.skip("VM URL uses vm.BASE_DOMAIN format", async () => {});
+	test.skip("DNS resolves VM subdomain to host IP", async () => {});
+	test.skip("DNS resolves API subdomain to host IP", async () => {});
+	test.skip("ACME proxy endpoints manage TXT records", async () => {});
 });
