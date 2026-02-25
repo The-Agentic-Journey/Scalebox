@@ -231,7 +231,15 @@ create_dns_record() {
     --ttl=60 \
     --rrdatas="$VM_IP"
 
-  # Create wildcard A record for subdomains (api.X, *.vm.X, etc.)
+  # Create explicit A record for api.{VM_FQDN} (propagates faster than wildcard)
+  gcloud dns record-sets create "api.${VM_FQDN}." \
+    --zone="$DNS_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --type=A \
+    --ttl=60 \
+    --rrdatas="$VM_IP"
+
+  # Create wildcard A record for subdomains (*.vm.X, etc.)
   gcloud dns record-sets create "*.${VM_FQDN}." \
     --zone="$DNS_ZONE" \
     --project="$GCLOUD_PROJECT" \
@@ -259,7 +267,8 @@ create_dns_record() {
   echo "==> Waiting for DNS propagation..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
-    if host "$VM_FQDN" 2>/dev/null | grep -q "$VM_IP"; then
+    if host "$VM_FQDN" 2>/dev/null | grep -q "$VM_IP" \
+       && host "api.$VM_FQDN" 2>/dev/null | grep -q "$VM_IP"; then
       echo "==> DNS propagated"
       return 0
     fi
@@ -273,6 +282,11 @@ delete_dns_record() {
   if [[ -n "$VM_NAME" && -n "$DNS_SUFFIX" ]]; then
     echo "==> Deleting DNS records: ${VM_NAME}.${DNS_SUFFIX}"
     gcloud dns record-sets delete "${VM_NAME}.${DNS_SUFFIX}." \
+      --zone="$DNS_ZONE" \
+      --project="$GCLOUD_PROJECT" \
+      --type=A \
+      --quiet 2>/dev/null || true
+    gcloud dns record-sets delete "api.${VM_NAME}.${DNS_SUFFIX}." \
       --zone="$DNS_ZONE" \
       --project="$GCLOUD_PROJECT" \
       --type=A \
@@ -474,12 +488,14 @@ check_firewall_rule() {
 
 test_reconciliation() {
   local token=$1
+  # Use --resolve to bypass DNS propagation delays for API domain
+  local resolve_flag="--resolve api.$VM_FQDN:443:$VM_IP"
 
   # --- Sub-test: VM survives restart ---
   echo "==> Test: VMs survive scaleboxd restart..."
 
   local create_result
-  create_result=$(curl -sk -X POST "https://$VM_FQDN/vms" \
+  create_result=$(curl -sk $resolve_flag -X POST "https://api.$VM_FQDN/vms" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
@@ -501,7 +517,7 @@ test_reconciliation() {
   echo "    Waiting for scaleboxd..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
-    if curl -sk "https://$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+    if curl -sk $resolve_flag "https://api.$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
       break
     fi
     sleep 2
@@ -511,13 +527,13 @@ test_reconciliation() {
 
   # Verify VM survived
   local list_after
-  list_after=$(curl -sk "https://$VM_FQDN/vms" -H "Authorization: Bearer $token")
+  list_after=$(curl -sk $resolve_flag "https://api.$VM_FQDN/vms" -H "Authorization: Bearer $token")
   echo "$list_after" | jq -e ".vms[] | select(.id == \"$vm_id\")" >/dev/null \
     || die "VM $vm_id not found after restart — VM did not survive"
   echo "    PASS: VM survived restart"
 
   # Clean up the test VM
-  curl -sk -X DELETE "https://$VM_FQDN/vms/$vm_id" \
+  curl -sk $resolve_flag -X DELETE "https://api.$VM_FQDN/vms/$vm_id" \
     -H "Authorization: Bearer $token" >/dev/null
 
   # --- Sub-test: Orphan cleanup ---
@@ -525,7 +541,7 @@ test_reconciliation() {
 
   # Create a VM (this will become an orphan)
   local orphan_result
-  orphan_result=$(curl -sk -X POST "https://$VM_FQDN/vms" \
+  orphan_result=$(curl -sk $resolve_flag -X POST "https://api.$VM_FQDN/vms" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
@@ -548,7 +564,7 @@ test_reconciliation() {
   echo "    Waiting for scaleboxd..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
-    if curl -sk "https://$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
+    if curl -sk $resolve_flag "https://api.$VM_FQDN/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1; then
       break
     fi
     sleep 2
@@ -561,7 +577,7 @@ test_reconciliation() {
 
   # Verify: no VMs listed (the orphan should have been cleaned up)
   local vm_count
-  vm_count=$(curl -sk "https://$VM_FQDN/vms" -H "Authorization: Bearer $token" | jq '.vms | length')
+  vm_count=$(curl -sk $resolve_flag "https://api.$VM_FQDN/vms" -H "Authorization: Bearer $token" | jq '.vms | length')
   [[ "$vm_count" == "0" ]] || die "Expected 0 VMs after orphan cleanup, got $vm_count"
   echo "    PASS: No VMs listed"
 

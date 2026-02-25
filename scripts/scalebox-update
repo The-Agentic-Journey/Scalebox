@@ -301,8 +301,10 @@ migrate_caddy_binary() {
 }
 
 migrate_caddy_config() {
+  # Ensure /etc/caddy/ exists (dpkg --remove caddy may have removed it)
+  mkdir -p /etc/caddy
+
   local caddyfile="/etc/caddy/Caddyfile"
-  [[ -f "$caddyfile" ]] || return 0
 
   # Write minimal placeholder Caddyfile (scaleboxd generates the real one)
   cat > "$caddyfile" << 'EOF'
