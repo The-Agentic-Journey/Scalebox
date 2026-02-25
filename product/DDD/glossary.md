@@ -64,20 +64,22 @@ Kernel-level NAT (iptables DNAT + MASQUERADE) that forwards UDP datagrams to VMs
 The UDP port (same number as SSH port) used for mosh sessions. Forwarded via iptables NAT to the VM's mosh-server. Mosh requires the same port number for client and server.
 
 ### HTTPS Gateway
-Caddy reverse proxy that routes `https://{vm-name}.{vm-domain}` to the VM's port 8080. Provides automatic TLS via Let's Encrypt.
+Caddy reverse proxy that routes `https://{vm-name}.vm.{base-domain}` to the VM's port 8080. Provides automatic TLS via a wildcard certificate.
 
-### API Domain (API_DOMAIN)
-The configured domain for HTTPS access to the Scalebox API (e.g., `scalebox.example.com`). When set, the API is accessible at `https://{api-domain}` with automatic TLS via Let's Encrypt.
+### Base Domain (BASE_DOMAIN)
+The single root domain for the Scalebox installation (e.g., `example.com`). When set, the API is accessible at `https://api.{base-domain}` and VMs are accessible at `https://{vm-name}.vm.{base-domain}` (routes to port 8080 inside the VM).
 
-### VM Domain (VM_DOMAIN)
-The configured domain suffix for VM HTTPS access (e.g., `vms.example.com`). Requires a wildcard DNS record (`*.vms.example.com`). When set, VMs are accessible at `https://{vm-name}.{vm-domain}` (routes to port 8080 inside the VM).
+### DNS Server
+A built-in DNS server that handles DNS resolution for the Scalebox domain. Responds to queries for `api.{base-domain}`, `*.vm.{base-domain}`, and `_acme-challenge` TXT records used during wildcard certificate issuance via DNS-01 challenge.
 
-**Note:** These are separate settings:
-- `API_DOMAIN` = where the Scalebox API lives
-- `VM_DOMAIN` = where VMs are exposed via HTTPS
+### Wildcard Certificate
+A single TLS certificate covering `*.vm.{base-domain}`, issued by Let's Encrypt via DNS-01 challenge. Covers all VM subdomains, eliminating the need for per-VM certificate issuance.
 
-### On-Demand TLS
-Caddy's mechanism for obtaining TLS certificates only when first requested. Validated via the `/caddy/check` endpoint.
+### ACME Proxy
+The acmeproxy module in Caddy that delegates DNS-01 challenge responses to the built-in DNS server. When Let's Encrypt needs to verify domain ownership, the ACME proxy instructs the DNS server to serve the required TXT record at `_acme-challenge.vm.{base-domain}`.
+
+### DNS-01 Challenge
+The ACME challenge type used for wildcard certificate issuance. Unlike HTTP-01 (which requires per-domain HTTP requests), DNS-01 proves domain ownership by serving a TXT record at `_acme-challenge.{domain}`. This enables a single wildcard certificate to cover all VM subdomains.
 
 ---
 

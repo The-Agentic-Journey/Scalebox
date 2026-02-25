@@ -1,17 +1,18 @@
 # Access Context
 
 **Classification:** Supporting Domain
-**Source:** `src/services/proxy.ts`, `src/services/udpProxy.ts`, `src/services/caddy.ts`
+**Source:** `src/services/proxy.ts`, `src/services/udpProxy.ts`, `src/services/caddy.ts`, `src/services/dns.ts`
 
 ---
 
 ## Purpose
 
-The Access context provides external connectivity to VMs. It exposes VM services to the outside world through three mechanisms:
+The Access context provides external connectivity to VMs. It exposes VM services to the outside world through four mechanisms:
 
 1. **TCP Proxy:** Port forwarding for SSH access
 2. **UDP Proxy:** iptables NAT for mosh traffic
-3. **HTTPS Gateway:** Caddy reverse proxy for web traffic
+3. **HTTPS Gateway:** Caddy reverse proxy for web traffic with wildcard TLS
+4. **DNS Server:** Built-in DNS for domain resolution and ACME DNS-01 challenges
 
 ---
 
@@ -214,7 +215,7 @@ Cleans up stale iptables rules on server startup. Since VMs don't survive restar
 
 ### Purpose
 
-Routes HTTPS traffic to VMs based on subdomain, with automatic TLS certificates.
+Routes HTTPS traffic to VMs based on subdomain, with automatic TLS via a single wildcard certificate.
 
 ### Architecture
 
@@ -223,7 +224,7 @@ Routes HTTPS traffic to VMs based on subdomain, with automatic TLS certificates.
                         │     Caddy       │
 Internet ──── :443 ────▶│  Reverse Proxy  │
                         │                 │
-                        │ *.vms.example.com│
+                        │ *.vm.example.com│
                         └────────┬────────┘
                                  │
           ┌──────────────────────┼──────────────────────┐
@@ -236,28 +237,52 @@ Internet ──── :443 ────▶│  Reverse Proxy  │
    │  :8080     │         │  :8080     │         │  :8080     │
    └────────────┘         └────────────┘         └────────────┘
 
-Request: https://very-silly-penguin.vms.example.com → VM A:8080
+Request: https://very-silly-penguin.vm.example.com → VM A:8080
 ```
+
+### Domain Structure
+
+Scalebox uses a single `BASE_DOMAIN` for the entire installation:
+
+| Subdomain | Purpose | Example |
+|-----------|---------|---------|
+| `api.{BASE_DOMAIN}` | Scalebox API | `api.example.com` |
+| `{name}.vm.{BASE_DOMAIN}` | VM HTTPS access | `very-silly-penguin.vm.example.com` |
 
 ### Domain Concepts
 
 #### Base Domain
 
-The configured domain suffix for VM subdomains.
+The single root domain for the Scalebox installation.
 
 **Configuration:** `BASE_DOMAIN` environment variable
-**Example:** `vms.example.com`
-**Prerequisite:** Wildcard DNS (`*.vms.example.com` → host IP)
+**Example:** `example.com`
+**Prerequisite:** DNS NS record delegating the domain (or a subdomain) to the Scalebox host's DNS server
 
-#### On-Demand TLS
+#### Wildcard Certificate
 
-Caddy's mechanism for obtaining certificates only when first requested.
+A single TLS certificate covering `*.vm.{BASE_DOMAIN}`, obtained via DNS-01 challenge.
 
 **Flow:**
-1. Client requests `https://very-silly-penguin.vms.example.com`
-2. Caddy checks `/caddy/check?domain=very-silly-penguin.vms.example.com`
-3. If 200, Caddy obtains Let's Encrypt certificate
-4. If 404, request is rejected
+1. Caddy requests a wildcard certificate for `*.vm.{BASE_DOMAIN}` from Let's Encrypt
+2. Let's Encrypt issues a DNS-01 challenge requiring a TXT record at `_acme-challenge.vm.{BASE_DOMAIN}`
+3. Caddy's acmeproxy module delegates the challenge to the built-in DNS server
+4. The DNS server serves the required TXT record
+5. Let's Encrypt verifies the record and issues the wildcard certificate
+6. All VM subdomains are covered by the single certificate — no per-VM issuance needed
+
+#### DNS Server
+
+A built-in DNS server that handles resolution for the Scalebox domain.
+
+**Responsibilities:**
+- Responds to `A` queries for `api.{BASE_DOMAIN}` with the host IP
+- Responds to `A` queries for `*.vm.{BASE_DOMAIN}` with the host IP
+- Serves `TXT` records for `_acme-challenge.vm.{BASE_DOMAIN}` during certificate issuance
+
+#### ACME Proxy
+
+The acmeproxy module configured in Caddy that bridges between Caddy's ACME client and the built-in DNS server. When Caddy needs to prove domain ownership for the wildcard certificate, the ACME proxy instructs the DNS server to create the required TXT record.
 
 #### Caddyfile
 
@@ -274,32 +299,34 @@ Regenerates Caddy configuration based on current VMs.
 
 ```
 1. If baseDomain not configured, skip
-2. Build route for each VM:
-   - Match: host {name}.{baseDomain}
+2. Build route for API:
+   - Match: host api.{baseDomain}
+   - Action: reverse_proxy localhost:8080
+3. Build route for each VM:
+   - Match: host {name}.vm.{baseDomain}
    - Action: reverse_proxy {vm-ip}:8080
-3. Write Caddyfile
-4. Reload Caddy (systemctl reload caddy)
+4. Configure wildcard TLS with acmeproxy DNS-01
+5. Write Caddyfile
+6. Reload Caddy (systemctl reload caddy)
 ```
 
 **Generated Caddyfile:**
 ```caddy
-{
-  on_demand_tls {
-    ask http://localhost:8080/caddy/check
-  }
+api.example.com {
+  reverse_proxy localhost:8080
 }
 
-*.vms.example.com {
+*.vm.example.com {
   tls {
-    on_demand
+    dns acmeproxy
   }
 
-  @very-silly-penguin host very-silly-penguin.vms.example.com
+  @very-silly-penguin host very-silly-penguin.vm.example.com
   handle @very-silly-penguin {
     reverse_proxy 172.16.0.2:8080
   }
 
-  @quite-bold-falcon host quite-bold-falcon.vms.example.com
+  @quite-bold-falcon host quite-bold-falcon.vm.example.com
   handle @quite-bold-falcon {
     reverse_proxy 172.16.0.3:8080
   }
@@ -310,40 +337,43 @@ Regenerates Caddy configuration based on current VMs.
 }
 ```
 
-### Caddy Check Endpoint
-
-Located in `src/index.ts` (not in Access context files):
-
-```typescript
-app.get("/caddy/check", (c) => {
-  const domain = c.req.query("domain");
-  // Extract VM name from domain
-  // Check if VM exists
-  // Return 200 or 404
-});
-```
-
-### TLS Flow
+### TLS Flow (DNS-01 Wildcard)
 
 ```
 ┌────────┐    ┌─────────┐    ┌────────────┐    ┌─────────────┐
-│ Client │    │  Caddy  │    │ Scalebox   │    │Let's Encrypt│
-└───┬────┘    └────┬────┘    │   API      │    └──────┬──────┘
-    │              │         └─────┬──────┘           │
-    │  HTTPS req   │               │                  │
-    │─────────────▶│               │                  │
-    │              │ /caddy/check  │                  │
-    │              │──────────────▶│                  │
-    │              │     200 OK    │                  │
-    │              │◀──────────────│                  │
-    │              │                                  │
-    │              │  ACME challenge                  │
-    │              │─────────────────────────────────▶│
-    │              │  Certificate                     │
-    │              │◀─────────────────────────────────│
-    │              │                                  │
-    │  TLS response│                                  │
-    │◀─────────────│                                  │
+│ Client │    │  Caddy  │    │ DNS Server │    │Let's Encrypt│
+└───┬────┘    └────┬────┘    └─────┬──────┘    └──────┬──────┘
+    │              │               │                   │
+    │              │  Request wildcard cert             │
+    │              │  *.vm.example.com                  │
+    │              │──────────────────────────────────▶│
+    │              │                                    │
+    │              │  DNS-01 challenge: set TXT record  │
+    │              │◀──────────────────────────────────│
+    │              │                                    │
+    │              │  acmeproxy:                        │
+    │              │  set TXT record                    │
+    │              │──────────────▶│                    │
+    │              │       OK      │                    │
+    │              │◀──────────────│                    │
+    │              │                                    │
+    │              │  Challenge ready                   │
+    │              │──────────────────────────────────▶│
+    │              │                                    │
+    │              │               │  TXT query:        │
+    │              │               │  _acme-challenge   │
+    │              │               │  .vm.example.com   │
+    │              │               │◀───────────────────│
+    │              │               │  TXT response      │
+    │              │               │───────────────────▶│
+    │              │                                    │
+    │              │  Wildcard certificate issued       │
+    │              │◀──────────────────────────────────│
+    │              │                                    │
+    │  HTTPS req   │                                    │
+    │─────────────▶│                                    │
+    │  TLS response│                                    │
+    │◀─────────────│                                    │
 ```
 
 ---
@@ -373,7 +403,7 @@ All are called from VM Lifecycle context after VM state changes.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `BASE_DOMAIN` | "" | Domain suffix (empty = disabled) |
+| `BASE_DOMAIN` | "" | Root domain for the installation (empty = disabled) |
 
 ---
 
@@ -385,14 +415,21 @@ All are called from VM Lifecycle context after VM state changes.
 |------------|---------|
 | `node:net` | TCP server and socket |
 
+### DNS Server
+
+| Dependency | Purpose |
+|------------|---------|
+| `node:dgram` | UDP server for DNS protocol |
+
 ### HTTPS Gateway
 
 | Dependency | Purpose |
 |------------|---------|
-| Caddy | Reverse proxy with auto-TLS |
+| Caddy | Reverse proxy with wildcard TLS |
+| Caddy acmeproxy module | DNS-01 challenge delegation to built-in DNS server |
 | `systemctl` | Caddy reload |
-| Let's Encrypt | TLS certificates |
-| Wildcard DNS | `*.{baseDomain}` → host |
+| Let's Encrypt | Wildcard TLS certificate via DNS-01 |
+| DNS delegation | NS record pointing to host for domain resolution |
 
 ---
 
@@ -428,4 +465,4 @@ All are called from VM Lifecycle context after VM state changes.
 | stopUdpProxy | `src/services/udpProxy.ts` |
 | cleanupOrphanedUdpRules | `src/services/udpProxy.ts` |
 | updateCaddyConfig | `src/services/caddy.ts` |
-| /caddy/check endpoint | `src/index.ts` |
+| DNS Server | `src/services/dns.ts` |
