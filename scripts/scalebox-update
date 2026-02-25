@@ -317,6 +317,12 @@ EOF
 # Managed by scaleboxd - do not edit manually
 EOF
 
+  # Unmask Caddy service (dpkg --remove caddy masks it via deb-systemd-helper)
+  # The mask creates a symlink /etc/systemd/system/caddy.service → /dev/null
+  # which must be removed before we can write the real service file.
+  systemctl unmask caddy 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service
+
   # Install Caddy systemd service for root (replacing apt's version)
   cat > /etc/systemd/system/caddy.service <<'CADDYSERVICEEOF'
 [Unit]
@@ -340,6 +346,7 @@ CADDYSERVICEEOF
 
   systemctl daemon-reload
   systemctl enable caddy
+  systemctl restart caddy
 
   log "Caddy config migrated to scaleboxd-managed format"
 }
