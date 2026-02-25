@@ -286,16 +286,21 @@ migrate_caddy_binary() {
 
   log "Upgrading Caddy to custom build with acmeproxy module..."
 
+  # Download custom binary to a temp location FIRST (before touching the existing install).
+  # This ensures that if the download fails, the old apt-installed Caddy is still intact.
   local caddy_url="https://caddyserver.com/api/download?os=linux&arch=$(dpkg --print-architecture)&p=github.com/caddy-dns/acmeproxy"
   curl -sSL "$caddy_url" -o /usr/bin/caddy.new
   chmod +x /usr/bin/caddy.new
-  mv /usr/bin/caddy.new /usr/bin/caddy
 
-  # If Caddy was installed via apt, remove the apt package metadata
-  # (keep the binary we just downloaded)
+  # Remove apt package metadata. dpkg --remove deletes all files owned by the
+  # package (including /usr/bin/caddy), so this MUST run after download but
+  # BEFORE we move the custom binary into place.
   if dpkg -l caddy &>/dev/null; then
     dpkg --remove --force-remove-reinstreq caddy 2>/dev/null || true
   fi
+
+  # Now move the pre-downloaded binary into place (safe — dpkg already ran)
+  mv /usr/bin/caddy.new /usr/bin/caddy
 
   log "Caddy upgraded successfully"
 }
