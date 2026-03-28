@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import { config } from "../config";
 import type { CreateVMRequest, SnapshotResponse, VM, VMResponse } from "../types";
 import {
@@ -339,7 +339,11 @@ export function vmToResponse(vm: VM): VMResponse {
 	};
 }
 
-export async function snapshotVm(vm: VM, templateName: string): Promise<SnapshotResponse> {
+export async function snapshotVm(
+	vm: VM,
+	templateName: string,
+	overwrite = false,
+): Promise<SnapshotResponse> {
 	// Validate template name (alphanumeric, dash, underscore only)
 	if (!/^[a-zA-Z0-9_-]+$/.test(templateName)) {
 		throw {
@@ -351,7 +355,15 @@ export async function snapshotVm(vm: VM, templateName: string): Promise<Snapshot
 	// Check if template already exists
 	const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
 	if (existsSync(templatePath)) {
-		throw { status: 409, message: "Template already exists" };
+		if (!overwrite) {
+			throw { status: 409, message: "Template already exists" };
+		}
+		// Prevent overwriting protected templates (e.g., debian-base)
+		if (config.protectedTemplates.includes(templateName)) {
+			throw { status: 403, message: "Cannot overwrite protected template" };
+		}
+		// Delete existing template before overwriting (ensures proper btrfs reflink on new copy)
+		await unlink(templatePath);
 	}
 
 	console.log(`[${vm.id}] Creating snapshot as template "${templateName}"...`);

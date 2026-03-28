@@ -440,24 +440,54 @@ cmd_vm_snapshot() {
   need_config
   local id="${1:-}"
   local name=""
+  local overwrite=false
   shift || true
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -n|--name) name="$2"; shift 2 ;;
+      --overwrite) overwrite=true; shift ;;
       *) die "Unknown option: $1" ;;
     esac
   done
 
-  [[ -n "$id" ]] || die "Usage: sb vm snapshot <name|id> -n TEMPLATE_NAME"
+  [[ -n "$id" ]] || die "Usage: sb vm snapshot <name|id> -n TEMPLATE_NAME [--overwrite]"
   [[ -n "$name" ]] || die "Template name required: -n NAME"
 
+  local json_body
+  if [[ "$overwrite" == "true" ]]; then
+    json_body=$(jq -n --arg n "$name" '{template_name:$n, overwrite:true}')
+  else
+    json_body=$(jq -n --arg n "$name" '{template_name:$n}')
+  fi
+
   local response
-  if response=$(api POST "/vms/$id/snapshot" -d "$(jq -n --arg n "$name" '{template_name:$n}')"); then
+  if response=$(api POST "/vms/$id/snapshot" -d "$json_body"); then
     echo "$response" | output_single
   else
-    echo "$response"
-    return 1
+    # Check for 409 conflict - prompt for overwrite in interactive mode
+    local status
+    status=$(echo "$response" | jq -r '.status // 0' 2>/dev/null)
+    if [[ "$status" == "409" && "$JSON_OUTPUT" != "true" ]]; then
+      printf "Template '%s' already exists. Overwrite? [y/N] " "$name"
+      read -r confirm
+      if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        local overwrite_body
+        overwrite_body=$(jq -n --arg n "$name" '{template_name:$n, overwrite:true}')
+        if response=$(api POST "/vms/$id/snapshot" -d "$overwrite_body"); then
+          echo "$response" | output_single
+        else
+          echo "$response"
+          return 1
+        fi
+      else
+        echo "Aborted."
+        return 1
+      fi
+    else
+      echo "$response"
+      return 1
+    fi
   fi
 }
 

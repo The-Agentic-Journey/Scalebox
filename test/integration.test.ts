@@ -325,13 +325,43 @@ describe("Firecracker API", () => {
 	);
 
 	// === Snapshot Overwrite ===
-	test.skip("snapshot existing template returns 409", async () => {
-		// Create VM, snapshot, attempt duplicate snapshot → 409
-	});
+	test(
+		"snapshot existing template returns 409",
+		async () => {
+			const vm = await sbVmCreate("debian-base");
+			createdVmIds.push(vm.id as string);
+			await sbVmWait(vm.id as string, 90);
 
-	test.skip("snapshot with overwrite replaces existing template", async () => {
-		// Create VM, snapshot, overwrite snapshot → 201
-	});
+			const templateName = `overwrite-test-${Date.now()}`;
+			createdTemplates.push(templateName);
+			await sbVmSnapshot(vm.id as string, templateName);
+
+			// Second snapshot with same name should return 409
+			const result = await sbVmSnapshotRaw(vm.id as string, templateName);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.data?.status).toBe(409);
+		},
+		{ timeout: 90000 },
+	);
+
+	test(
+		"snapshot with overwrite replaces existing template",
+		async () => {
+			const vm = await sbVmCreate("debian-base");
+			createdVmIds.push(vm.id as string);
+			await sbVmWait(vm.id as string, 90);
+
+			const templateName = `overwrite-replace-${Date.now()}`;
+			createdTemplates.push(templateName);
+			await sbVmSnapshot(vm.id as string, templateName);
+
+			// Overwrite should succeed
+			const snapshot = await sbVmSnapshot(vm.id as string, templateName, { overwrite: true });
+			expect(snapshot.template).toBe(templateName);
+			expect(snapshot.size_bytes).toBeGreaterThan(0);
+		},
+		{ timeout: 90000 },
+	);
 
 	// === Phase 7: Cleanup ===
 	test(
