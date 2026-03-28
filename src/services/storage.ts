@@ -3,6 +3,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { $ } from "bun";
 import { config } from "../config";
 
+export interface InitializeRootfsOptions {
+	sshPublicKey: string;
+	hostname?: string;
+}
+
 export async function copyRootfs(templateName: string, vmId: string): Promise<string> {
 	const templatePath = `${config.dataDir}/templates/${templateName}.ext4`;
 	const vmPath = `${config.dataDir}/vms/${vmId}.ext4`;
@@ -20,65 +25,45 @@ export async function copyRootfs(templateName: string, vmId: string): Promise<st
 	return vmPath;
 }
 
-export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Promise<void> {
-	// Mount the rootfs temporarily
+export async function initializeRootfs(
+	rootfsPath: string,
+	options: InitializeRootfsOptions,
+): Promise<void> {
 	const mountPoint = `/tmp/mount-${Date.now()}`;
 	await mkdir(mountPoint, { recursive: true });
 
 	try {
 		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
 
-		// Ensure /home/user/.ssh directory exists and write the key
+		// 1. SSH key injection
 		const sshDir = `${mountPoint}/home/user/.ssh`;
 		await $`sudo mkdir -p ${sshDir}`;
 		await $`sudo chmod 700 ${sshDir}`;
 
-		const authorizedKeysPath = `${sshDir}/authorized_keys`;
-		// Write to temp file first, then move with sudo
 		const tempKeyFile = `/tmp/authorized_keys_${Date.now()}`;
-		await writeFile(tempKeyFile, `${sshPublicKey}\n`, { mode: 0o600 });
-		await $`sudo cp ${tempKeyFile} ${authorizedKeysPath}`;
-		await $`sudo chmod 600 ${authorizedKeysPath}`;
+		await writeFile(tempKeyFile, `${options.sshPublicKey}\n`, { mode: 0o600 });
+		await $`sudo cp ${tempKeyFile} ${sshDir}/authorized_keys`;
+		await $`sudo chmod 600 ${sshDir}/authorized_keys`;
 		await $`rm -f ${tempKeyFile}`;
 
-		// Ensure proper ownership for the .ssh directory and its contents
-		// Use numeric UID/GID because 'user' only exists inside the rootfs, not on the host
+		// 2. Set ownership of .ssh directory (covers authorized_keys)
 		await $`sudo chown -R 1000:1000 ${sshDir}`;
-	} finally {
-		try {
-			await $`sudo umount ${mountPoint}`;
-		} catch {
-			// Ignore unmount errors
+
+		// 3. Hostname
+		if (options.hostname) {
+			const tempHostname = `/tmp/hostname_${Date.now()}`;
+			await writeFile(tempHostname, `${options.hostname}\n`);
+			await $`sudo cp ${tempHostname} ${mountPoint}/etc/hostname`;
+			await $`rm -f ${tempHostname}`;
+
+			const tempHosts = `/tmp/hosts_${Date.now()}`;
+			await writeFile(
+				tempHosts,
+				`127.0.0.1\tlocalhost\n::1\t\tlocalhost\n127.0.1.1\t${options.hostname}\n`,
+			);
+			await $`sudo cp ${tempHosts} ${mountPoint}/etc/hosts`;
+			await $`rm -f ${tempHosts}`;
 		}
-		try {
-			await $`rmdir ${mountPoint}`.quiet();
-		} catch {
-			// Ignore rmdir errors
-		}
-	}
-}
-
-export async function setHostname(rootfsPath: string, hostname: string): Promise<void> {
-	const mountPoint = `/tmp/mount-${Date.now()}`;
-	await mkdir(mountPoint, { recursive: true });
-
-	try {
-		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
-
-		// Write /etc/hostname
-		const tempFile = `/tmp/hostname_${Date.now()}`;
-		await writeFile(tempFile, `${hostname}\n`);
-		await $`sudo cp ${tempFile} ${mountPoint}/etc/hostname`;
-		await $`rm -f ${tempFile}`;
-
-		// Write /etc/hosts with loopback entries and hostname
-		const tempHostsFile = `/tmp/hosts_${Date.now()}`;
-		await writeFile(
-			tempHostsFile,
-			`127.0.0.1\tlocalhost\n::1\t\tlocalhost\n127.0.1.1\t${hostname}\n`,
-		);
-		await $`sudo cp ${tempHostsFile} ${mountPoint}/etc/hosts`;
-		await $`rm -f ${tempHostsFile}`;
 	} finally {
 		try {
 			await $`sudo umount ${mountPoint}`;
