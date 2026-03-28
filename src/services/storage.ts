@@ -71,12 +71,14 @@ export async function setHostname(rootfsPath: string, hostname: string): Promise
 		await $`sudo cp ${tempFile} ${mountPoint}/etc/hostname`;
 		await $`rm -f ${tempFile}`;
 
-		// Update /etc/hosts — remove any existing 127.0.1.1 line and add new one
-		await $`sudo sed -i '/^127\\.0\\.1\\.1/d' ${mountPoint}/etc/hosts`.quiet().nothrow();
-		const tempHostsLine = `/tmp/hosts_line_${Date.now()}`;
-		await writeFile(tempHostsLine, `127.0.1.1\t${hostname}\n`);
-		await $`cat ${tempHostsLine} | sudo tee -a ${mountPoint}/etc/hosts`.quiet();
-		await $`rm -f ${tempHostsLine}`;
+		// Write /etc/hosts with loopback entries and hostname
+		const tempHostsFile = `/tmp/hosts_${Date.now()}`;
+		await writeFile(
+			tempHostsFile,
+			`127.0.0.1\tlocalhost\n::1\t\tlocalhost\n127.0.1.1\t${hostname}\n`,
+		);
+		await $`sudo cp ${tempHostsFile} ${mountPoint}/etc/hosts`;
+		await $`rm -f ${tempHostsFile}`;
 	} finally {
 		try {
 			await $`sudo umount ${mountPoint}`;
