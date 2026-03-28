@@ -399,6 +399,14 @@ migrate_host_ip() {
   fi
 }
 
+migrate_swap_config() {
+  local config_file="/etc/scaleboxd/config"
+  if ! grep -q "^DEFAULT_SWAP_SIZE_MIB=" "$config_file" 2>/dev/null; then
+    echo "DEFAULT_SWAP_SIZE_MIB=2048" >> "$config_file"
+    log "Added DEFAULT_SWAP_SIZE_MIB=2048 to config"
+  fi
+}
+
 migrate_base_image() {
   local config_file="/etc/scaleboxd/config"
   if ! grep -q "^BASE_IMAGE=" "$config_file" 2>/dev/null; then
@@ -416,6 +424,7 @@ run_migrations() {
   free_port_53
   migrate_caddy_binary
   migrate_caddy_config
+  migrate_swap_config
 }
 
 # Phase 2: called via re-exec after installing new scripts.

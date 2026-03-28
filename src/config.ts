@@ -8,6 +8,10 @@ export const config = {
 	defaultVcpuCount: Number(process.env.DEFAULT_VCPU_COUNT) || 2,
 	defaultMemSizeMib: Number(process.env.DEFAULT_MEM_SIZE_MIB) || 2048,
 	defaultDiskSizeGib: Number(process.env.DEFAULT_DISK_SIZE_GIB) || 2,
+	defaultSwapSizeMib:
+		process.env.DEFAULT_SWAP_SIZE_MIB !== undefined
+			? Number(process.env.DEFAULT_SWAP_SIZE_MIB)
+			: 2048,
 	maxDiskSizeGib: Number(process.env.MAX_DISK_SIZE_GIB) || 100,
 	protectedTemplates: ["debian-base"],
 	// Base domain for all HTTPS access (e.g., "scalebox.example.com")
