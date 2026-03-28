@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=7
+TEMPLATE_VERSION=8
 
 # Set up bind mounts for chroot environment
 setup_chroot_mounts() {
@@ -131,10 +131,41 @@ create_ext4_image() {
 
   mount -o loop "$tmp_path" "$mount_dir"
   cp -a "$rootfs_dir"/* "$mount_dir"/
+
+  # Create swapfile on the mounted ext4 (not in rootfs_dir) to ensure
+  # blocks are properly allocated — cp -a would create a sparse copy.
+  setup_swap "$mount_dir"
+
   umount "$mount_dir"
 
   # Atomic rename to final path
   mv "$tmp_path" "$template_path"
+}
+
+# Create swapfile on mounted ext4 image and configure fstab
+# Must run on the mounted ext4 (not the staging rootfs_dir) to avoid
+# cp -a creating a sparse file that swapon would reject.
+setup_swap() {
+  local mount_dir="$1"
+  local swap_size_mib="${DEFAULT_SWAP_SIZE_MIB:-2048}"
+
+  if [[ "$swap_size_mib" -eq 0 ]]; then
+    echo "[template-build] Swap disabled (DEFAULT_SWAP_SIZE_MIB=0)"
+    return
+  fi
+
+  echo "[template-build] Creating ${swap_size_mib}MiB swapfile..."
+  dd if=/dev/zero of="$mount_dir/swapfile" bs=1M count="$swap_size_mib" status=none
+  chmod 600 "$mount_dir/swapfile"
+  mkswap "$mount_dir/swapfile" >/dev/null
+
+  # Add swap entry to fstab (create fstab if it doesn't exist)
+  if [[ ! -f "$mount_dir/etc/fstab" ]]; then
+    echo "# /etc/fstab: static file system information" > "$mount_dir/etc/fstab"
+  fi
+  echo "/swapfile none swap sw 0 0" >> "$mount_dir/etc/fstab"
+
+  echo "[template-build] Swap configured: ${swap_size_mib}MiB"
 }
 
 # Main function to build the debian-base template
