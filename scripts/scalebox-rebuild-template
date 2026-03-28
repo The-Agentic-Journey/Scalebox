@@ -17,6 +17,12 @@ rebuild_template() {
   local template_path="$DATA_DIR/templates/debian-base.ext4"
   local backup_path="$DATA_DIR/templates/debian-base.ext4.old"
 
+  # Source config to get BASE_IMAGE
+  if [[ -f /etc/scaleboxd/config ]]; then
+    # shellcheck source=/dev/null
+    source /etc/scaleboxd/config
+  fi
+
   log "Rebuilding debian-base template..."
 
   # Check for running VMs (they're fine - btrfs COW handles it)

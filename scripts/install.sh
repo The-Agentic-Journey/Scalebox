@@ -22,6 +22,9 @@ HOST_IP="${HOST_IP:-}"
 FC_VERSION="1.10.1"
 KERNEL_VERSION="5.10.245"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/x86_64/vmlinux-${KERNEL_VERSION}"
+CRANE_VERSION="0.20.3"
+CRANE_URL="https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+BASE_IMAGE="${BASE_IMAGE:-ghcr.io/the-agentic-journey/agenticbaseimage:latest}"
 
 # === Helpers ===
 log() { echo "[scalebox] $1"; }
@@ -122,6 +125,23 @@ install_firecracker() {
     wget -q "$KERNEL_URL" -O "$kernel_path"
     echo "$KERNEL_VERSION" > "$DATA_DIR/kernel/version"
   fi
+}
+
+# === Install crane (container image tool) ===
+install_crane() {
+  local crane_bin="/usr/local/bin/crane"
+
+  if [[ -f "$crane_bin" ]]; then
+    log "crane already installed"
+    return
+  fi
+
+  log "Installing crane v${CRANE_VERSION}..."
+  wget -q "$CRANE_URL" -O /tmp/crane.tar.gz
+  tar -xzf /tmp/crane.tar.gz -C /tmp crane
+  mv /tmp/crane "$crane_bin"
+  chmod +x "$crane_bin"
+  rm -f /tmp/crane.tar.gz
 }
 
 # === Setup Network (systemd-networkd) ===
@@ -471,6 +491,7 @@ BASE_DOMAIN=$BASE_DOMAIN
 HOST_IP=$HOST_IP
 ACME_PROXY_PASSWORD=$ACME_PROXY_PASSWORD
 ACME_STAGING=$ACME_STAGING
+BASE_IMAGE=$BASE_IMAGE
 EOF
   )
 
@@ -533,6 +554,7 @@ main() {
   install_deps
   setup_storage
   install_firecracker
+  install_crane
   setup_network
   install_template_library
   create_rootfs

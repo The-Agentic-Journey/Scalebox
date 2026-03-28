@@ -7,7 +7,7 @@
 #   source /usr/local/lib/scalebox/template-build.sh
 #   build_debian_base "/var/lib/scalebox"
 
-TEMPLATE_VERSION=6
+TEMPLATE_VERSION=7
 
 # Set up bind mounts for chroot environment
 setup_chroot_mounts() {
@@ -145,29 +145,33 @@ build_debian_base() {
   local template_path="$data_dir/templates/debian-base.ext4"
   local version_path="$data_dir/templates/debian-base.version"
 
+  # Read base image from config (set by /etc/scaleboxd/config or environment)
+  local base_image="${BASE_IMAGE:-ghcr.io/the-agentic-journey/agenticbaseimage:latest}"
+
+  # Verify crane is installed
+  if ! command -v crane &>/dev/null; then
+    echo "[template-build] ERROR: crane not found. Install it first." >&2
+    exit 1
+  fi
+
   # Create temp directories in data_dir to avoid /tmp noexec issues
-  # GCP VMs often have /tmp mounted with noexec, which prevents chroot from working
   local build_dir="$data_dir/build"
   mkdir -p "$build_dir"
   local rootfs_dir
   local mount_dir
   rootfs_dir=$(mktemp -d "$build_dir/rootfs-XXXXXX")
   mount_dir=$(mktemp -d "$build_dir/mount-XXXXXX")
-  # mktemp -d creates directories with mode 700, but we need 755 for sudo to work
-  # inside the chroot (sudo validates path accessibility even for chroot operations)
   chmod 755 "$rootfs_dir" "$mount_dir"
 
   # Set up cleanup trap
   trap "cleanup_build '$rootfs_dir' '$mount_dir'" EXIT
 
-  # Run debootstrap with minimal packages
-  # Note: nodejs, npm, python3-pip, python3-venv are installed later in configure_rootfs
-  # because their postinst scripts need /dev, /proc, /sys mounted
-  debootstrap --include=openssh-server,iproute2,iputils-ping,haveged,netcat-openbsd,mosh,locales,sudo,curl,wget,vim \
-    bookworm "$rootfs_dir" http://deb.debian.org/debian
-
-  # Configure the rootfs
-  configure_rootfs "$rootfs_dir"
+  # Pull and extract Docker image filesystem
+  echo "[template-build] Pulling and extracting $base_image..."
+  if ! crane export "$base_image" - | tar -xf - -C "$rootfs_dir"; then
+    echo "[template-build] ERROR: Failed to pull or extract Docker image '$base_image'" >&2
+    exit 1
+  fi
 
   # Create ext4 image
   create_ext4_image "$rootfs_dir" "$mount_dir" "$template_path"
@@ -179,5 +183,5 @@ build_debian_base() {
   trap - EXIT
   cleanup_build "$rootfs_dir" "$mount_dir"
 
-  echo "[scalebox] Base template created: $template_path"
+  echo "[scalebox] Base template created from $base_image: $template_path"
 }

@@ -18,4 +18,6 @@ export const config = {
 	hostIp: process.env.HOST_IP || "",
 	// Internal password for Caddy ACME proxy communication
 	acmeProxyPassword: process.env.ACME_PROXY_PASSWORD || "",
+	// Docker image used to create the base template (used by template-build.sh)
+	baseImage: process.env.BASE_IMAGE || "ghcr.io/the-agentic-journey/agenticbaseimage:latest",
 };
