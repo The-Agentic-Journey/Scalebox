@@ -75,7 +75,8 @@ function buildCaddyfileContent(): string {
 	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }`;
 	} else {
-		globalBlock = "{}";
+		globalBlock = `{
+}`;
 	}
 
 	return `# Managed by scaleboxd - do not edit manually

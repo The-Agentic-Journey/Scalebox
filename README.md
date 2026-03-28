@@ -10,9 +10,16 @@ Spin up isolated sandboxes from snapshots. Perfect for AI agents, CI runners, an
 curl -sSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/bootstrap.sh | sudo bash
 ```
 
-The installer prompts for configuration and handles everything: Firecracker, networking, storage, and a base Debian template.
+The installer prompts for your domain and server IP, then handles everything: Firecracker, networking, storage, DNS, TLS, and a base Debian template.
 
-**Requirements:** Debian/Ubuntu with KVM support.
+Or install non-interactively:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/scripts/bootstrap.sh \
+  | sudo BASE_DOMAIN=scalebox.example.com HOST_IP=203.0.113.42 bash
+```
+
+**Requirements:** Debian/Ubuntu with KVM support. Port 53 and 443 open for DNS and HTTPS.
 
 ## CLI Installation (for clients)
 
@@ -25,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/The-Agentic-Journey/Scalebox/main/s
 Then configure it:
 
 ```bash
-sb login https://your-server.example.com
+sb login https://api.scalebox.example.com
 # Paste your API token when prompted
 ```
 
@@ -41,8 +48,8 @@ scalebox vm create -t debian-base -k "$(cat ~/.ssh/id_rsa.pub)"
 # SSH into it
 ssh -p 22001 root@your-server
 
-# Or access via HTTPS (if VM_DOMAIN configured)
-curl https://happy-red-panda.vms.example.com
+# Or access via HTTPS
+curl https://happy-red-panda.vm.scalebox.example.com
 
 # Snapshot it as a new template
 scalebox vm snapshot vm-a1b2c3 -n my-configured-app
@@ -62,9 +69,10 @@ scalebox vm delete vm-a1b2c3
 ┌─────────────────────────────────────────────────────────────┐
 │                       Host Server                           │
 │                                                             │
-│  :443 ───── Caddy ───── HTTPS for API + VMs                 │
-│  :8080 ──── scaleboxd ─ REST API                            │
-│  :22xxx ─── TCP Proxy ─ SSH to VMs                          │
+│  :53 ────── DNS Server ─ Authoritative for BASE_DOMAIN      │
+│  :443 ───── Caddy ────── HTTPS for API + VMs                │
+│  :8080 ──── scaleboxd ── REST API                           │
+│  :22xxx ─── TCP Proxy ── SSH to VMs                         │
 │                                                             │
 │  br0 (172.16.0.1/16)                                        │
 │    ├── tap0 ── VM 1 (172.16.0.2) ── happy-red-panda         │
@@ -81,14 +89,39 @@ VMs boot from copy-on-write clones of templates. Creating a VM = clone template 
 
 ## Configuration
 
-### Domains (optional)
+### Domain and DNS Setup
 
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `API_DOMAIN` | HTTPS for the Scalebox API | `scalebox.example.com` |
-| `VM_DOMAIN` | HTTPS for VMs (wildcard DNS required) | `vms.example.com` |
+Scalebox includes a built-in authoritative DNS server. When you configure a `BASE_DOMAIN`, Scalebox handles all DNS resolution and TLS certificate issuance automatically using a single wildcard certificate via DNS-01 challenges.
 
-Without domains, the API runs on `http://server:8080` and VMs are SSH-only.
+The installer prompts for two values:
+
+| Setting | Purpose | Example |
+|---------|---------|---------|
+| `BASE_DOMAIN` | Root domain for HTTPS access | `scalebox.example.com` |
+| `HOST_IP` | Public IP of the server | `203.0.113.42` |
+
+This gives you:
+- **API**: `https://api.scalebox.example.com`
+- **VMs**: `https://{vm-name}.vm.scalebox.example.com`
+
+Without a domain, the API runs on `http://server:8080` and VMs are SSH-only.
+
+#### DNS Record
+
+You need **one NS record** at your DNS provider to delegate your base domain to the Scalebox server:
+
+```
+scalebox.example.com.     IN  NS  ns.scalebox.example.com.
+ns.scalebox.example.com.  IN  A   203.0.113.42
+```
+
+This tells the internet "ask `203.0.113.42` for any DNS queries about `*.scalebox.example.com`." Scalebox's DNS server then:
+- Resolves all subdomains (`api.*`, `*.vm.*`) to your server IP
+- Answers ACME challenge queries so Caddy can obtain wildcard TLS certificates from Let's Encrypt
+
+#### Firewall
+
+Port **53** (UDP + TCP) must be open — Let's Encrypt queries it during certificate validation. Port **443** must also be open for HTTPS.
 
 ### TLS Options
 
@@ -105,14 +138,17 @@ The installer creates these automatically:
 **Daemon config** (`/etc/scaleboxd/config`):
 ```bash
 API_PORT=8080
-API_TOKEN=sb-xxx...  # Auto-generated, shown after install
+API_TOKEN=sb-xxx...       # Auto-generated, shown after install
 DATA_DIR=/var/lib/scalebox
-VM_DOMAIN=vms.example.com
+BASE_DOMAIN=scalebox.example.com
+HOST_IP=203.0.113.42
+ACME_PROXY_PASSWORD=xxx   # Internal, auto-generated
+ACME_STAGING=false
 ```
 
 **CLI config** (`~/.config/scalebox/config` or `/etc/scalebox/config`):
 ```bash
-SCALEBOX_URL=https://scalebox.example.com
+SCALEBOX_URL=https://api.scalebox.example.com
 SCALEBOX_TOKEN=sb-xxx...
 ```
 
@@ -171,7 +207,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 ### Example: Create VM
 
 ```bash
-curl -X POST https://scalebox.example.com/vms \
+curl -X POST https://api.scalebox.example.com/vms \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"template": "debian-base", "ssh_public_key": "ssh-rsa AAAA..."}'
