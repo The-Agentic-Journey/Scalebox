@@ -243,8 +243,11 @@ describe("Firecracker API", () => {
 		// Create VM, SSH in, check swapon --show
 	});
 
-	test.skip("info returns default_swap_size_mib", async () => {
-		// GET /info, check default_swap_size_mib field
+	test("info returns default_swap_size_mib", async () => {
+		const status = await sbStatus();
+		expect(status.default_swap_size_mib).toBeDefined();
+		expect(typeof status.default_swap_size_mib).toBe("number");
+		expect(status.default_swap_size_mib).toBeGreaterThanOrEqual(0);
 	});
 
 	// === Phase 6: Snapshots ===
