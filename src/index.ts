@@ -168,12 +168,13 @@ app.post("/vms/:id/snapshot", async (c) => {
 	try {
 		const body = await c.req.json();
 		const templateName = body.template_name;
+		const overwrite = body.overwrite === true;
 
 		if (!templateName) {
 			return c.json({ error: "template_name is required" }, 400);
 		}
 
-		const result = await snapshotVm(vm, templateName);
+		const result = await snapshotVm(vm, templateName, overwrite);
 		return c.json(result, 201);
 	} catch (e: unknown) {
 		console.error("Snapshot creation failed:", e);
