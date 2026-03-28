@@ -7,7 +7,7 @@
 
 ## Purpose
 
-The Storage context manages VM disk images (rootfs) and performs filesystem operations like copying, mounting, and SSH key injection. It leverages btrfs copy-on-write for efficient storage utilization.
+The Storage context manages VM disk images (rootfs) and performs filesystem operations like copying, mounting, and rootfs initialization. It leverages btrfs copy-on-write for efficient storage utilization.
 
 ---
 
@@ -55,20 +55,39 @@ Creates a VM rootfs by copying from a template.
 
 **Returns:** Path to new rootfs (`/var/lib/scalebox/vms/{vmId}.ext4`)
 
-### injectSshKey(rootfsPath: string, sshPublicKey: string): Promise<void>
+### initializeRootfs(rootfsPath: string, options: InitializeRootfsOptions): Promise<void>
 
-Adds an SSH public key to the rootfs for authentication.
+Prepares a VM's rootfs before boot by performing all initialization in a single mount/unmount cycle.
+
+```typescript
+interface InitializeRootfsOptions {
+  sshPublicKey: string;           // Required: SSH key for access
+  hostname?: string;              // Optional: VM hostname
+  envVars?: Record<string, string>; // Optional: environment variables
+  files?: Array<{                 // Optional: files to inject
+    path: string;                 //   Absolute path in VM
+    content: string;              //   Base64-encoded content
+  }>;
+  initScript?: string;            // Optional: bash script for first boot
+}
+```
 
 ```
 1. Create temporary mount point
 2. Mount rootfs: sudo mount -o loop {rootfsPath} {mountPoint}
 3. Create /root/.ssh directory with mode 700
 4. Write authorized_keys with mode 600
-5. Unmount rootfs
-6. Clean up mount point
+5. Set hostname in /etc/hostname (if provided)
+6. Write env vars to /home/user/.ssh/environment (if provided)
+7. Create files at specified paths, owned by user:user, mode 640 (if provided)
+8. Write init script to /opt/scalebox/init.sh, mode 755 (if provided)
+9. Unmount rootfs
+10. Clean up mount point
 ```
 
-**Security:** Uses sudo for mount operations. Proper permissions (700/600) prevent unauthorized access.
+**Design:** All operations happen within a single mount/unmount cycle for efficiency. Previous versions used separate `injectSshKey()` and `setHostname()` calls, each requiring their own mount cycle.
+
+**Security:** Uses sudo for mount operations. SSH keys get proper permissions (700/600). VM files are owned by `user:user` (UID 1000) with mode `640`. Init script runs as root on first boot and self-disables after execution.
 
 ### deleteRootfs(rootfsPath: string): Promise<void>
 
@@ -166,7 +185,7 @@ Only modified block uses additional space
 ### Sequence Diagram
 
 ```
-injectSshKey()
+initializeRootfs()
       │
       ▼
 ┌─────────────┐
@@ -189,6 +208,34 @@ injectSshKey()
        │
        ▼
 ┌─────────────────────────────┐
+│ Set hostname in             │
+│ {mount}/etc/hostname        │
+│ (if provided)               │
+└──────┬──────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Write env vars to           │
+│ {mount}/home/user/.ssh/     │
+│ environment (if provided)   │
+└──────┬──────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Create files at specified   │
+│ paths, owned by user:user   │
+│ mode 640 (if provided)      │
+└──────┬──────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Write init script to        │
+│ {mount}/opt/scalebox/       │
+│ init.sh (if provided)       │
+└──────┬──────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
 │ sudo umount {mountpoint}    │
 └──────┬──────────────────────┘
        │
@@ -200,7 +247,7 @@ injectSshKey()
 
 ### Error Handling
 
-Both `injectSshKey` and `clearAuthorizedKeys` use try/finally to ensure cleanup:
+Both `initializeRootfs` and `clearAuthorizedKeys` use try/finally to ensure cleanup:
 
 ```typescript
 try {
@@ -248,7 +295,13 @@ try {
 ```typescript
 // VM creation
 rootfsPath = await copyRootfs(req.template, vmId);
-await injectSshKey(rootfsPath, req.ssh_public_key);
+await initializeRootfs(rootfsPath, {
+  sshPublicKey: req.ssh_public_key,
+  hostname: vm.name,
+  envVars: req.env_vars,
+  files: req.files,
+  initScript: req.init_script,
+});
 
 // VM deletion
 await deleteRootfs(vm.rootfsPath);

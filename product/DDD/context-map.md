@@ -71,7 +71,7 @@ See [CLI Context](contexts/cli.md) for details on the CLI's local state manageme
 │   │                 │                     │                 │                  │
 │   │ Services:       │                     │ Services:       │                  │
 │   │ Rootfs Mgmt     │                     │ Firecracker     │                  │
-│   │ SSH Key Inject  │                     │ Process Control │                  │
+│   │ Rootfs Init     │                     │ Process Control │                  │
 │   │                 │                     │                 │                  │
 │   │ src/services/   │                     │ src/services/   │                  │
 │   │ storage.ts      │                     │ firecracker.ts  │                  │
@@ -127,7 +127,7 @@ See [CLI Context](contexts/cli.md) for details on the CLI's local state manageme
 **Relationship:** Customer-Supplier
 **Direction:** VM Lifecycle depends on Storage
 **Integration:**
-- VM creation copies rootfs and injects SSH keys
+- VM creation copies rootfs and initializes VM environment (SSH keys, hostname, env vars, files, init script)
 - VM deletion removes rootfs
 - Snapshotting copies rootfs to template location
 

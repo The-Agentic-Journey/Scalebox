@@ -121,6 +121,20 @@ Let's Encrypt's staging environment for testing certificate issuance. Unlike the
 - CI/CD environments where real certificates aren't needed
 - Development setups to avoid hitting Let's Encrypt rate limits
 
+### VM Initialization
+
+#### Environment Variables (VM)
+Key-value pairs injected into a VM's `~/.ssh/environment` file during creation. Accessible in all SSH sessions (interactive and non-interactive) via OpenSSH's `PermitUserEnvironment` feature. Also available to the init script via systemd `EnvironmentFile`.
+
+#### VM Files
+Base64-encoded file contents injected into the VM rootfs at specified absolute paths during creation. Owned by `user:user` (UID 1000), mode `640`. Parent directories are created automatically.
+
+#### Init Script
+A bash script injected into the VM rootfs at `/opt/scalebox/init.sh` during creation and executed as root on first boot via a one-shot systemd service (`scalebox-init.service`). Self-disables and removes the script after execution. Analogous to cloud-init user data.
+
+#### Rootfs Initialization
+The consolidated mount operation (`initializeRootfs`) that prepares a VM's rootfs before boot: SSH key injection, hostname setting, environment variable writing, file creation, and init script installation. Performs all operations in a single mount/unmount cycle for efficiency.
+
 ---
 
 ## API Terms
@@ -152,7 +166,7 @@ List of template names that cannot be deleted via API. Default: `["debian-base"]
 ## Process Terms
 
 ### VM Creation
-The orchestrated process of: allocate resources → copy rootfs → inject SSH key → set hostname → create TAP → start Firecracker → start proxy.
+The orchestrated process of: allocate resources → copy rootfs → initialize rootfs (SSH key, hostname, env vars, files, init script) → create TAP → start Firecracker → start proxy.
 
 ### VM Deletion
 The cleanup process of: stop proxy → kill Firecracker → delete TAP → delete rootfs → release resources.

@@ -134,7 +134,7 @@ Orchestrates VM creation by coordinating multiple contexts:
 5. Allocate port (Networking)
 6. Derive TAP device name from ID
 7. Copy rootfs from template (Storage)
-8. Inject SSH public key (Storage)
+8. Initialize rootfs - SSH key, hostname, env vars, files, init script (Storage)
 9. Create TAP device (Networking)
 10. Start Firecracker process (Hypervisor)
 11. Start TCP proxy (Access)
@@ -244,7 +244,7 @@ The system doesn't explicitly publish events, but these logical events occur:
 |---------|-----------------|---------|
 | Template | Read | Copy rootfs from template |
 | Networking | Read/Write | Allocate/release IP, port, TAP |
-| Storage | Write | Copy rootfs, inject keys |
+| Storage | Write | Copy rootfs, initialize VM environment |
 | Hypervisor | Write | Start/stop/pause Firecracker |
 | Access | Write | Start/stop proxy, update Caddy |
 
