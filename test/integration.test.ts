@@ -238,6 +238,15 @@ describe("Firecracker API", () => {
 		{ timeout: 90000 },
 	);
 
+	// === Swap ===
+	test.skip("VM has swap enabled", async () => {
+		// Create VM, SSH in, check swapon --show
+	});
+
+	test.skip("info returns default_swap_size_mib", async () => {
+		// GET /info, check default_swap_size_mib field
+	});
+
 	// === Phase 6: Snapshots ===
 	test(
 		"snapshot VM creates template",
