@@ -377,33 +377,24 @@ migrate_host_ip() {
   fi
 }
 
-main() {
-  log "Starting Scalebox update..."
-
-  check_root
-  check_deps
-  check_installed
-
-  # Create temp directory for download
-  local temp_dir
-  temp_dir=$(mktemp -d)
-  trap "rm -rf $temp_dir" EXIT
-
-  # Get and download release
-  local release_url
-  release_url=$(get_release_url)
-  download_release "$release_url" "$temp_dir"
-
-  # Perform update with rollback on failure
-  backup_current
-  stop_service
-  install_new "$temp_dir"
+run_migrations() {
   upgrade_kernel
   migrate_config_to_base_domain
   migrate_host_ip
   free_port_53
   migrate_caddy_binary
   migrate_caddy_config
+}
+
+# Phase 2: called via re-exec after installing new scripts.
+# At this point, we are running the NEW scalebox-update code,
+# so any new migration functions are available.
+post_install() {
+  local temp_dir="$1"
+  trap "rm -rf $temp_dir" EXIT
+
+  log "Running migrations (new code)..."
+  run_migrations
   start_service
 
   if health_check; then
@@ -416,6 +407,41 @@ main() {
     rollback
     die "Update failed - rolled back to previous version"
   fi
+}
+
+main() {
+  # Phase 2: re-execed with new code to run migrations
+  if [[ "${1:-}" == "--post-install" ]]; then
+    post_install "$2"
+    return
+  fi
+
+  log "Starting Scalebox update..."
+
+  check_root
+  check_deps
+  check_installed
+
+  # Create temp directory for download
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  # NOTE: no EXIT trap here — the re-execed script handles cleanup
+
+  # Get and download release
+  local release_url
+  release_url=$(get_release_url)
+  download_release "$release_url" "$temp_dir"
+
+  # Phase 1: install new binaries and scripts (old code can do this)
+  backup_current
+  stop_service
+  install_new "$temp_dir"
+
+  # Re-exec into the newly installed scalebox-update so that
+  # migrations run with NEW code. This solves the bootstrap problem
+  # where the old script doesn't have new migration functions.
+  log "Re-executing with updated script..."
+  exec /usr/local/bin/scalebox-update --post-install "$temp_dir"
 }
 
 main "$@"
