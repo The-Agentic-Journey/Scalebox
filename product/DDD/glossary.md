@@ -97,6 +97,10 @@ A file at `/var/lib/scalebox/kernel/version` containing the kernel version strin
 ### Socket Path
 The Unix socket (`/tmp/firecracker-{vm-id}.sock`) used to configure and control a Firecracker instance.
 
+### Swapfile
+
+A 2 GiB (configurable via `DEFAULT_SWAP_SIZE_MIB`) swap file at `/swapfile` inside each VM's rootfs. Created during template build on the ext4 image to ensure proper block allocation. Enabled via `/etc/fstab` at boot. Provides OOM resilience — the guest kernel can swap cold pages to disk instead of killing processes. Setting `DEFAULT_SWAP_SIZE_MIB=0` disables swap in newly built templates.
+
 ### Reflink Copy
 A btrfs feature enabling instant, space-efficient file copies via copy-on-write. Used when creating VMs from templates.
 
