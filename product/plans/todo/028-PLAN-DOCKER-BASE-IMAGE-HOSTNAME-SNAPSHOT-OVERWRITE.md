@@ -4,7 +4,7 @@
 
 Three improvements to Scalebox:
 
-1. **Docker-based base image**: Replace `debootstrap` with `crane export` to create the base template from a hosted Docker image. Configurable via `BASE_IMAGE` in `/etc/scaleboxd/config`, defaulting to `debian:bookworm`. This simplifies the build process and lets users bring their own pre-built images.
+1. **Docker-based base image**: Replace `debootstrap` with `crane export` to create the base template from a hosted Docker image. Configurable via `BASE_IMAGE` in `/etc/scaleboxd/config`, defaulting to `ghcr.io/the-agentic-journey/agenticbaseimage:latest`. This simplifies the build process and lets users bring their own pre-built images.
 
 2. **VM hostname**: Set each VM's hostname to its generated three-word name (e.g., `very-silly-penguin`) during creation, so `hostname` inside the VM returns the expected name.
 
@@ -452,9 +452,9 @@ In the `createVm` function, after the SSH key injection (after line 222), add:
 
 ### Goal
 
-Replace `debootstrap` with `crane export` for creating the base template from a Docker image. Install the `crane` binary during installation and updates. Add `BASE_IMAGE` to the configuration (default: `debian:bookworm`). Expose `base_image` in the `/info` API endpoint.
+Replace `debootstrap` with `crane export` for creating the base template from a Docker image. Install the `crane` binary during installation and updates. Add `BASE_IMAGE` to the configuration (default: `ghcr.io/the-agentic-journey/agenticbaseimage:latest`). Expose `base_image` in the `/info` API endpoint.
 
-**Note:** With the default `debian:bookworm` image, the base template will NOT have SSH, user accounts, or other customizations that `configure_rootfs` previously added. This is intentional — the user plans to use a pre-built Docker image with those features baked in. Until then, SSH-dependent tests will not pass with a freshly built template. Existing installations that already have a `debian-base.ext4` template are unaffected (the template is only rebuilt when running `scalebox-rebuild-template`).
+**Note:** The default image `ghcr.io/the-agentic-journey/agenticbaseimage:latest` includes SSH server, user account, mosh, haveged, locale, Claude Code CLI, and all other packages needed for full Scalebox compatibility. All existing tests (including SSH-dependent ones) should pass with this image.
 
 ### Acceptance Test (Red)
 
@@ -494,7 +494,7 @@ Add after line 20 (before the closing `};`):
 
 ```typescript
 	// Docker image used to create the base template (used by template-build.sh)
-	baseImage: process.env.BASE_IMAGE || "debian:bookworm",
+	baseImage: process.env.BASE_IMAGE || "ghcr.io/the-agentic-journey/agenticbaseimage:latest",
 ```
 
 #### `src/index.ts` — expose in `/info`
@@ -517,7 +517,7 @@ CRANE_URL="https://github.com/google/go-containerregistry/releases/download/v${C
 Add `BASE_IMAGE` variable initialization (after line 20, near the other config vars):
 
 ```bash
-BASE_IMAGE="${BASE_IMAGE:-debian:bookworm}"
+BASE_IMAGE="${BASE_IMAGE:-ghcr.io/the-agentic-journey/agenticbaseimage:latest}"
 ```
 
 Add `install_crane` function (after the `install_firecracker` function, around line 125):
@@ -598,7 +598,7 @@ Also add a migration to append `BASE_IMAGE` to existing configs if not present. 
 migrate_base_image() {
   local config_file="/etc/scaleboxd/config"
   if ! grep -q "^BASE_IMAGE=" "$config_file" 2>/dev/null; then
-    echo "BASE_IMAGE=debian:bookworm" >> "$config_file"
+    echo "BASE_IMAGE=ghcr.io/the-agentic-journey/agenticbaseimage:latest" >> "$config_file"
     log "Added BASE_IMAGE to config"
   fi
 }
@@ -623,7 +623,7 @@ build_debian_base() {
   local version_path="$data_dir/templates/debian-base.version"
 
   # Read base image from config (set by /etc/scaleboxd/config or environment)
-  local base_image="${BASE_IMAGE:-debian:bookworm}"
+  local base_image="${BASE_IMAGE:-ghcr.io/the-agentic-journey/agenticbaseimage:latest}"
 
   # Verify crane is installed
   if ! command -v crane &>/dev/null; then
@@ -667,7 +667,7 @@ build_debian_base() {
 **Key differences from old version:**
 - `debootstrap` call replaced with `crane export "$base_image" - | tar -xf - -C "$rootfs_dir"`
 - `configure_rootfs` call removed entirely
-- `BASE_IMAGE` read from environment with default `debian:bookworm`
+- `BASE_IMAGE` read from environment with default `ghcr.io/the-agentic-journey/agenticbaseimage:latest`
 - `crane` presence verified before starting
 
 The `configure_rootfs`, `setup_chroot_mounts`, and `teardown_chroot_mounts` functions remain in the file but are no longer called by `build_debian_base`. They can be removed in a future cleanup.
@@ -692,7 +692,7 @@ Add config sourcing before the rebuild, so `BASE_IMAGE` is available. In the `re
 - `scalebox-rebuild-template` creates a template from the Docker image
 - Template file exists and is valid ext4
 - A VM can be created from the Docker-based template (API returns 201)
-- Run `./do check` — the `info returns base_image` test passes; note that SSH-dependent tests may fail with vanilla `debian:bookworm` template until a Docker image with SSH is used
+- Run `./do check` — all tests pass (the default image includes SSH and all required packages)
 
 ---
 
@@ -725,7 +725,7 @@ The base template (`debian-base.ext4`) was previously built using `debootstrap` 
 - Not reproducible (package versions varied by build time)
 
 ## Decision
-Replace `debootstrap` with `crane export` to pull a Docker image and extract its filesystem directly. The Docker image reference is configurable via the `BASE_IMAGE` environment variable (default: `debian:bookworm`).
+Replace `debootstrap` with `crane export` to pull a Docker image and extract its filesystem directly. The Docker image reference is configurable via the `BASE_IMAGE` environment variable (default: `ghcr.io/the-agentic-journey/agenticbaseimage:latest`).
 
 **Tool choice:** `crane` from Google's go-containerregistry project — a single static binary (~30MB) that can pull and export Docker images without requiring Docker daemon, containerd, or any runtime. Downloaded and installed the same way as the Firecracker binary.
 
@@ -739,7 +739,7 @@ Replace `debootstrap` with `crane export` to pull a Docker image and extract its
 
 ### Negative
 - Requires `crane` as an additional binary dependency
-- The default `debian:bookworm` image lacks SSH, user accounts, and development tools — users must build a custom Docker image or accept limited functionality until they do
+- The default image must include SSH server, user account, and other Scalebox prerequisites — if users switch to a minimal image, VM access features will not work
 - The `configure_rootfs` customization pipeline is no longer used (remains in code for reference but is dead code)
 
 ### Neutral
@@ -771,7 +771,7 @@ Add under **Infrastructure Terms** (after the "COW" entry, before "ACME Staging"
 
 ```markdown
 ### Base Image (BASE_IMAGE)
-The Docker image used as the source for building the base template. Configured via `BASE_IMAGE` in `/etc/scaleboxd/config`. Default: `debian:bookworm`. The image is pulled and extracted using `crane` during template creation.
+The Docker image used as the source for building the base template. Configured via `BASE_IMAGE` in `/etc/scaleboxd/config`. Default: `ghcr.io/the-agentic-journey/agenticbaseimage:latest`. The image is pulled and extracted using `crane` during template creation.
 
 ### crane
 A CLI tool from Google's go-containerregistry project used to pull and export Docker images without requiring a Docker daemon. Installed at `/usr/local/bin/crane`. Used by `template-build.sh` to convert a Docker image into a rootfs directory.
@@ -829,10 +829,10 @@ The process of recreating the base template from the configured Docker image usi
 After all phases are complete:
 
 1. All 4 acceptance tests pass (none skipped)
-2. `./do check` passes — full verification pipeline (except SSH-dependent tests if using vanilla `debian:bookworm`)
+2. `./do check` passes — full verification pipeline
 3. On a fresh install:
    - `crane` is installed at `/usr/local/bin/crane`
-   - `BASE_IMAGE=debian:bookworm` is in `/etc/scaleboxd/config`
+   - `BASE_IMAGE=ghcr.io/the-agentic-journey/agenticbaseimage:latest` is in `/etc/scaleboxd/config`
    - `debian-base.ext4` template is created from the Docker image
 4. `sb vm snapshot <id> -n existing --overwrite` replaces an existing template
 5. `sb vm snapshot <id> -n existing` (without flag) prompts interactively on conflict
@@ -843,7 +843,7 @@ After all phases are complete:
 
 ## Update Considerations
 
-- **Config changes**: New `BASE_IMAGE` key with default `debian:bookworm` in `config.ts` and `/etc/scaleboxd/config`. Old configs without `BASE_IMAGE` work fine (default applied). `migrate_base_image` in `scalebox-update` appends the key.
+- **Config changes**: New `BASE_IMAGE` key with default `ghcr.io/the-agentic-journey/agenticbaseimage:latest` in `config.ts` and `/etc/scaleboxd/config`. Old configs without `BASE_IMAGE` work fine (default applied). `migrate_base_image` in `scalebox-update` appends the key.
 - **Storage changes**: None — same template directory structure, same ext4 format
 - **Dependency changes**: `crane` binary installed by `install_crane()` in both `install.sh` and `scalebox-update`. `debootstrap` is no longer required for template builds but remains installed.
 - **Migration needed**: No data migration. `TEMPLATE_VERSION` bumped to 7; `scalebox-update` will prompt users to run `scalebox-rebuild-template` to get a Docker-based template.
