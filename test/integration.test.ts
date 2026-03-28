@@ -438,9 +438,65 @@ describe("Firecracker API", () => {
 			{ timeout: 150000 },
 		);
 
-		test.skip("env, files, and init script work together", async () => {
-			// Criterion #6
-		});
+		test(
+			"env, files, and init script work together",
+			async () => {
+				const tmpFile = join(tmpdir(), `scalebox-combined-file-${Date.now()}.txt`);
+				await writeFileHelper(tmpFile, "combined-file-content");
+
+				const tmpScript = join(tmpdir(), `scalebox-combined-init-${Date.now()}.sh`);
+				await writeFileHelper(
+					tmpScript,
+					'#!/bin/bash\necho "$COMBINED_VAR" > /home/user/combined-init.txt\nchown 1000:1000 /home/user/combined-init.txt\n',
+				);
+
+				try {
+					const vm = await sbVmCreateWithInit("debian-base", {
+						env: ["COMBINED_VAR=it-works"],
+						files: [`/home/user/combined-file.txt:@${tmpFile}`],
+						initScript: tmpScript,
+					});
+					createdVmIds.push(vm.id as string);
+
+					await waitForSsh(vm.ssh_port as number, 90000);
+
+					// Verify env var
+					const envVal = await sshExec(vm.ssh_port as number, "printenv COMBINED_VAR");
+					expect(envVal.trim()).toBe("it-works");
+
+					// Verify file
+					const fileContent = await sshExec(
+						vm.ssh_port as number,
+						"cat /home/user/combined-file.txt",
+					);
+					expect(fileContent.trim()).toBe("combined-file-content");
+
+					const filePerms = await sshExec(
+						vm.ssh_port as number,
+						"stat -c '%a %U:%G' /home/user/combined-file.txt",
+					);
+					expect(filePerms.trim()).toBe("640 user:user");
+
+					// Verify init script ran with env vars
+					let initResult = "";
+					for (let i = 0; i < 30; i++) {
+						try {
+							initResult = await sshExec(
+								vm.ssh_port as number,
+								"cat /home/user/combined-init.txt 2>/dev/null || echo PENDING",
+							);
+							if (initResult.trim() !== "PENDING") break;
+						} catch {}
+						await Bun.sleep(1000);
+					}
+					expect(initResult.trim()).toBe("it-works");
+				} finally {
+					await rmFile(tmpFile, { force: true });
+					await rmFile(tmpScript, { force: true });
+				}
+			},
+			{ timeout: 150000 },
+		);
 	});
 
 	// === Phase 6: Snapshots ===
