@@ -30,6 +30,7 @@ export interface CreateVMRequest {
 	vcpu_count?: number;
 	mem_size_mib?: number;
 	disk_size_gib?: number; // defaults to template size
+	env?: Record<string, string>;
 }
 
 export interface SnapshotRequest {

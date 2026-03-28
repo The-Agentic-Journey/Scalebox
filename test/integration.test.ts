@@ -14,6 +14,7 @@ import {
 	sbTemplateDelete,
 	sbTemplateList,
 	sbVmCreate,
+	sbVmCreateWithInit,
 	sbVmDelete,
 	sbVmGet,
 	sbVmList,
@@ -272,9 +273,22 @@ describe("Firecracker API", () => {
 
 	// === VM Initialization ===
 	describe("VM Initialization", () => {
-		test.skip("env vars accessible via non-interactive SSH", async () => {
-			// Criterion #1
-		});
+		test(
+			"env vars accessible via non-interactive SSH",
+			async () => {
+				const vm = await sbVmCreateWithInit("debian-base", {
+					env: ["FOO=bar", "HELLO=world"],
+				});
+				createdVmIds.push(vm.id as string);
+
+				await waitForSsh(vm.ssh_port as number, 90000);
+				const foo = await sshExec(vm.ssh_port as number, "printenv FOO");
+				expect(foo.trim()).toBe("bar");
+				const hello = await sshExec(vm.ssh_port as number, "printenv HELLO");
+				expect(hello.trim()).toBe("world");
+			},
+			{ timeout: 90000 },
+		);
 
 		test.skip("files created with correct content and permissions", async () => {
 			// Criterion #2

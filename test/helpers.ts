@@ -194,6 +194,31 @@ export async function sbVmCreate(template: string): Promise<Record<string, unkno
 	return result.data;
 }
 
+export async function sbVmCreateWithInit(
+	template: string,
+	options?: { env?: string[]; files?: string[]; initScript?: string },
+): Promise<Record<string, unknown>> {
+	const args = ["vm", "create", "-t", template, "-k", `@${TEST_PUBLIC_KEY_PATH}`];
+	if (options?.env) {
+		for (const e of options.env) {
+			args.push("--env", e);
+		}
+	}
+	if (options?.files) {
+		for (const f of options.files) {
+			args.push("--file", f);
+		}
+	}
+	if (options?.initScript) {
+		args.push("--init-script", options.initScript);
+	}
+	const result = await sbCmd(...args);
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to create VM with init options: ${result.error}`);
+	}
+	return result.data;
+}
+
 export async function sbVmDelete(nameOrId: string): Promise<void> {
 	const result = await sbCmd("vm", "delete", nameOrId);
 	if (result.exitCode !== 0) {

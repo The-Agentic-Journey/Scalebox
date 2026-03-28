@@ -339,6 +339,7 @@ cmd_vm_create() {
   need_config
   local template="debian-base" key="" key_file=""
   local disk="" mem=""
+  local env_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -360,6 +361,7 @@ cmd_vm_create() {
         fi
         shift 2
         ;;
+      --env) env_args+=("$2"); shift 2 ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -377,6 +379,15 @@ cmd_vm_create() {
   fi
   if [[ -n "$mem" ]]; then
     json_body=$(echo "$json_body" | jq --argjson m "$mem" '. + {mem_size_mib: $m}')
+  fi
+  if [[ ${env_args[@]+x} ]]; then
+    local env_json="{}"
+    for ev in "${env_args[@]}"; do
+      local ekey="${ev%%=*}"
+      local env_val="${ev#*=}"
+      env_json=$(echo "$env_json" | jq --arg k "$ekey" --arg v "$env_val" '. + {($k): $v}')
+    done
+    json_body=$(echo "$json_body" | jq --argjson e "$env_json" '. + {env: $e}')
   fi
 
   local response
@@ -709,6 +720,7 @@ cmd_go() {
   need_config
   local template="debian-base" key="" key_file=""
   local disk="" mem=""
+  local env_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -730,6 +742,7 @@ cmd_go() {
         fi
         shift 2
         ;;
+      --env) env_args+=("$2"); shift 2 ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -747,6 +760,15 @@ cmd_go() {
   fi
   if [[ -n "$mem" ]]; then
     json_body=$(echo "$json_body" | jq --argjson m "$mem" '. + {mem_size_mib: $m}')
+  fi
+  if [[ ${env_args[@]+x} ]]; then
+    local env_json="{}"
+    for ev in "${env_args[@]}"; do
+      local ekey="${ev%%=*}"
+      local env_val="${ev#*=}"
+      env_json=$(echo "$env_json" | jq --arg k "$ekey" --arg v "$env_val" '. + {($k): $v}')
+    done
+    json_body=$(echo "$json_body" | jq --argjson e "$env_json" '. + {env: $e}')
   fi
 
   local response

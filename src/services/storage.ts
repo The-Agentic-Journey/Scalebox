@@ -6,6 +6,7 @@ import { config } from "../config";
 export interface InitializeRootfsOptions {
 	sshPublicKey: string;
 	hostname?: string;
+	env?: Record<string, string>;
 }
 
 export async function copyRootfs(templateName: string, vmId: string): Promise<string> {
@@ -49,7 +50,31 @@ export async function initializeRootfs(
 		// 2. Set ownership of .ssh directory (covers authorized_keys)
 		await $`sudo chown -R 1000:1000 ${sshDir}`;
 
-		// 3. Hostname
+		// 3. Environment variables
+		if (options.env && Object.keys(options.env).length > 0) {
+			const envContent = `${Object.entries(options.env)
+				.map(([k, v]) => `${k}=${v}`)
+				.join("\n")}\n`;
+			const tempEnvFile = `/tmp/ssh_environment_${Date.now()}`;
+			await writeFile(tempEnvFile, envContent, { mode: 0o640 });
+			await $`sudo cp ${tempEnvFile} ${sshDir}/environment`;
+			await $`sudo chmod 640 ${sshDir}/environment`;
+			await $`sudo chown 1000:1000 ${sshDir}/environment`;
+			await $`rm -f ${tempEnvFile}`;
+
+			// Enable PermitUserEnvironment in sshd_config
+			const sshdConfig = `${mountPoint}/etc/ssh/sshd_config`;
+			await $`sudo sed -i 's/^#\\? *PermitUserEnvironment.*/PermitUserEnvironment yes/' ${sshdConfig}`;
+			// Append if sed didn't match anything
+			const check = await $`sudo grep -c '^PermitUserEnvironment yes' ${sshdConfig}`
+				.nothrow()
+				.text();
+			if (check.trim() === "0") {
+				await $`echo 'PermitUserEnvironment yes' | sudo tee -a ${sshdConfig}`.quiet();
+			}
+		}
+
+		// 4. Hostname
 		if (options.hostname) {
 			const tempHostname = `/tmp/hostname_${Date.now()}`;
 			await writeFile(tempHostname, `${options.hostname}\n`);

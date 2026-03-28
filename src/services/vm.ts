@@ -222,6 +222,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		await initializeRootfs(rootfsPath, {
 			sshPublicKey: req.ssh_public_key,
 			hostname: name || undefined,
+			env: req.env,
 		});
 
 		// Create TAP device

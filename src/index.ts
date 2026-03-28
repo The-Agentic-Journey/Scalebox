@@ -143,6 +143,26 @@ app.post("/vms", async (c) => {
 				}
 			}
 
+			if (body.env !== undefined) {
+				if (typeof body.env !== "object" || Array.isArray(body.env) || body.env === null) {
+					return c.json({ error: "env must be an object of key-value string pairs" }, 400);
+				}
+				for (const [key, value] of Object.entries(body.env)) {
+					if (typeof value !== "string") {
+						return c.json({ error: `env value for "${key}" must be a string` }, 400);
+					}
+					if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+						return c.json(
+							{ error: `env key "${key}" is invalid (must match [a-zA-Z_][a-zA-Z0-9_]*)` },
+							400,
+						);
+					}
+					if (value.includes("\n")) {
+						return c.json({ error: `env value for "${key}" must not contain newlines` }, 400);
+					}
+				}
+			}
+
 			const vm = await createVm(body);
 			await updateCaddyConfig();
 			return c.json(vmToResponse(vm), 201);
