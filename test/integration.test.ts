@@ -270,6 +270,33 @@ describe("Firecracker API", () => {
 		expect(status.default_swap_size_mib).toBeGreaterThanOrEqual(0);
 	});
 
+	// === VM Initialization ===
+	describe("VM Initialization", () => {
+		test.skip("env vars accessible via non-interactive SSH", async () => {
+			// Criterion #1
+		});
+
+		test.skip("files created with correct content and permissions", async () => {
+			// Criterion #2
+		});
+
+		test.skip("init script executed on boot", async () => {
+			// Criterion #3
+		});
+
+		test.skip("init script has access to env vars", async () => {
+			// Criterion #4
+		});
+
+		test.skip("init script removed after execution", async () => {
+			// Criterion #5
+		});
+
+		test.skip("env, files, and init script work together", async () => {
+			// Criterion #6
+		});
+	});
+
 	// === Phase 6: Snapshots ===
 	test(
 		"snapshot VM creates template",
