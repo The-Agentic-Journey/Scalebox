@@ -163,6 +163,27 @@ app.post("/vms", async (c) => {
 				}
 			}
 
+			if (body.files !== undefined) {
+				if (!Array.isArray(body.files)) {
+					return c.json({ error: "files must be an array" }, 400);
+				}
+				for (let i = 0; i < body.files.length; i++) {
+					const file = body.files[i];
+					if (!file.path || typeof file.path !== "string") {
+						return c.json({ error: `files[${i}].path must be a non-empty string` }, 400);
+					}
+					if (!file.path.startsWith("/")) {
+						return c.json({ error: `files[${i}].path must be an absolute path` }, 400);
+					}
+					if (file.path.includes("..")) {
+						return c.json({ error: `files[${i}].path must not contain '..'` }, 400);
+					}
+					if (!file.content || typeof file.content !== "string") {
+						return c.json({ error: `files[${i}].content must be a non-empty string` }, 400);
+					}
+				}
+			}
+
 			const vm = await createVm(body);
 			await updateCaddyConfig();
 			return c.json(vmToResponse(vm), 201);

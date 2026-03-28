@@ -31,6 +31,7 @@ export interface CreateVMRequest {
 	mem_size_mib?: number;
 	disk_size_gib?: number; // defaults to template size
 	env?: Record<string, string>;
+	files?: Array<{ path: string; content: string }>;
 }
 
 export interface SnapshotRequest {

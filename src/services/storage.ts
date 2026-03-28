@@ -7,6 +7,7 @@ export interface InitializeRootfsOptions {
 	sshPublicKey: string;
 	hostname?: string;
 	env?: Record<string, string>;
+	files?: Array<{ path: string; content: string }>;
 }
 
 export async function copyRootfs(templateName: string, vmId: string): Promise<string> {
@@ -88,6 +89,29 @@ export async function initializeRootfs(
 			);
 			await $`sudo cp ${tempHosts} ${mountPoint}/etc/hosts`;
 			await $`rm -f ${tempHosts}`;
+		}
+		// 5. Files
+		if (options.files && options.files.length > 0) {
+			for (const file of options.files) {
+				const decoded = Buffer.from(file.content, "base64");
+				const targetPath = `${mountPoint}${file.path}`;
+				const parentDir = targetPath.substring(0, targetPath.lastIndexOf("/"));
+
+				await $`sudo mkdir -p ${parentDir}`;
+
+				const tempFile = `/tmp/scalebox_file_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+				await writeFile(tempFile, decoded, { mode: 0o640 });
+				await $`sudo cp ${tempFile} ${targetPath}`;
+				await $`sudo chmod 640 ${targetPath}`;
+				await $`sudo chown 1000:1000 ${targetPath}`;
+				await $`rm -f ${tempFile}`;
+
+				// Ensure parent directories are also owned by user
+				// (only for dirs under /home/user)
+				if (file.path.startsWith("/home/user/")) {
+					await $`sudo chown 1000:1000 ${parentDir}`;
+				}
+			}
 		}
 	} finally {
 		try {

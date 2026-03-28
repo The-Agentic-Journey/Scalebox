@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { rm as rmFile, writeFile as writeFileHelper } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { $ } from "bun";
 import {
 	API_BASE_URL,
@@ -290,9 +293,34 @@ describe("Firecracker API", () => {
 			{ timeout: 90000 },
 		);
 
-		test.skip("files created with correct content and permissions", async () => {
-			// Criterion #2
-		});
+		test(
+			"files created with correct content and permissions",
+			async () => {
+				const testContent = "hello-from-file-test";
+				const tmpFile = join(tmpdir(), `scalebox-file-test-${Date.now()}.txt`);
+				await writeFileHelper(tmpFile, testContent);
+
+				try {
+					const vm = await sbVmCreateWithInit("debian-base", {
+						files: [`/home/user/test-file.txt:@${tmpFile}`],
+					});
+					createdVmIds.push(vm.id as string);
+
+					await waitForSsh(vm.ssh_port as number, 90000);
+					const content = await sshExec(vm.ssh_port as number, "cat /home/user/test-file.txt");
+					expect(content.trim()).toBe(testContent);
+
+					const perms = await sshExec(
+						vm.ssh_port as number,
+						"stat -c '%a %U:%G' /home/user/test-file.txt",
+					);
+					expect(perms.trim()).toBe("640 user:user");
+				} finally {
+					await rmFile(tmpFile, { force: true });
+				}
+			},
+			{ timeout: 90000 },
+		);
 
 		test.skip("init script executed on boot", async () => {
 			// Criterion #3
