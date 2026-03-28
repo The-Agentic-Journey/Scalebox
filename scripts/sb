@@ -855,14 +855,14 @@ Commands:
   status                        Health check (no auth required)
 
   vm list                       List VMs
-  vm create [-t TPL] [-k KEY] [-d DISK] [-m MEM]
+  vm create [-t TPL] [-k KEY] [-d DISK] [-m MEM] [--env K=V]... [--file PATH:@FILE]... [--init-script FILE]
                                 Create VM (template defaults to debian-base)
   vm get <name|id>              Get VM details
   vm delete <name|id>           Delete VM
   vm snapshot <name|id> -n NAME Snapshot VM to template
   vm wait <name|id> --ssh       Wait for SSH to be ready
 
-  go [-t TPL] [-k KEY] [-d DISK] [-m MEM]
+  go [-t TPL] [-k KEY] [-d DISK] [-m MEM] [--env K=V]... [--file PATH:@FILE]... [--init-script FILE]
                                 Create VM and connect immediately
                                 (template defaults to debian-base)
 
@@ -906,6 +906,9 @@ Examples:
   sb --json vm get my-vm-name
   sb vm wait my-vm-name --ssh --timeout 120
   sb vm snapshot my-vm-name -n my-snapshot
+  sb vm create --env DB_HOST=db.example.com --env DB_PORT=5432
+  sb vm create --file /home/user/.env:@.env --file /home/user/config.json:@config.json
+  sb vm create --init-script setup.sh --env API_KEY=secret
 EOF
 }
 
