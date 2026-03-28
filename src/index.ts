@@ -184,6 +184,12 @@ app.post("/vms", async (c) => {
 				}
 			}
 
+			if (body.init_script !== undefined) {
+				if (typeof body.init_script !== "string" || body.init_script.length === 0) {
+					return c.json({ error: "init_script must be a non-empty base64-encoded string" }, 400);
+				}
+			}
+
 			const vm = await createVm(body);
 			await updateCaddyConfig();
 			return c.json(vmToResponse(vm), 201);

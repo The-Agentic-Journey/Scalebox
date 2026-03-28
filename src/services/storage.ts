@@ -8,6 +8,7 @@ export interface InitializeRootfsOptions {
 	hostname?: string;
 	env?: Record<string, string>;
 	files?: Array<{ path: string; content: string }>;
+	initScript?: string;
 }
 
 export async function copyRootfs(templateName: string, vmId: string): Promise<string> {
@@ -112,6 +113,45 @@ export async function initializeRootfs(
 					await $`sudo chown 1000:1000 ${parentDir}`;
 				}
 			}
+		}
+		// 6. Init script
+		if (options.initScript) {
+			const scriptContent = Buffer.from(options.initScript, "base64").toString();
+
+			// Write the init script
+			await $`sudo mkdir -p ${mountPoint}/opt/scalebox`;
+			const tempScript = `/tmp/scalebox_init_${Date.now()}`;
+			await writeFile(tempScript, scriptContent, { mode: 0o755 });
+			await $`sudo cp ${tempScript} ${mountPoint}/opt/scalebox/init.sh`;
+			await $`sudo chmod 755 ${mountPoint}/opt/scalebox/init.sh`;
+			await $`rm -f ${tempScript}`;
+
+			// Write the systemd service unit
+			const serviceContent = `[Unit]
+Description=Scalebox Init Script
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/scalebox/init.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '/opt/scalebox/init.sh; _rc=$$?; rm -f /opt/scalebox/init.sh; systemctl disable scalebox-init.service; exit $$_rc'
+EnvironmentFile=-/home/user/.ssh/environment
+StandardOutput=journal
+StandardError=journal
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`;
+			const tempService = `/tmp/scalebox_init_service_${Date.now()}`;
+			await writeFile(tempService, serviceContent);
+			await $`sudo cp ${tempService} ${mountPoint}/etc/systemd/system/scalebox-init.service`;
+			await $`rm -f ${tempService}`;
+
+			// Enable the service via symlink (cannot use systemctl on mounted fs)
+			await $`sudo mkdir -p ${mountPoint}/etc/systemd/system/multi-user.target.wants`;
+			await $`sudo ln -sf /etc/systemd/system/scalebox-init.service ${mountPoint}/etc/systemd/system/multi-user.target.wants/scalebox-init.service`;
 		}
 	} finally {
 		try {

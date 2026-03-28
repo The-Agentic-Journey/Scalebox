@@ -224,6 +224,7 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 			hostname: name || undefined,
 			env: req.env,
 			files: req.files,
+			initScript: req.init_script,
 		});
 
 		// Create TAP device

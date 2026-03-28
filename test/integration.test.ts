@@ -322,17 +322,121 @@ describe("Firecracker API", () => {
 			{ timeout: 90000 },
 		);
 
-		test.skip("init script executed on boot", async () => {
-			// Criterion #3
-		});
+		test(
+			"init script executed on boot",
+			async () => {
+				const tmpScript = join(tmpdir(), `scalebox-init-test-${Date.now()}.sh`);
+				await writeFileHelper(
+					tmpScript,
+					'#!/bin/bash\necho "init-completed" > /home/user/init-result.txt\nchown 1000:1000 /home/user/init-result.txt\n',
+				);
 
-		test.skip("init script has access to env vars", async () => {
-			// Criterion #4
-		});
+				try {
+					const vm = await sbVmCreateWithInit("debian-base", {
+						initScript: tmpScript,
+					});
+					createdVmIds.push(vm.id as string);
 
-		test.skip("init script removed after execution", async () => {
-			// Criterion #5
-		});
+					await waitForSsh(vm.ssh_port as number, 90000);
+					let result = "";
+					for (let i = 0; i < 30; i++) {
+						try {
+							result = await sshExec(
+								vm.ssh_port as number,
+								"cat /home/user/init-result.txt 2>/dev/null || echo PENDING",
+							);
+							if (result.trim() !== "PENDING") break;
+						} catch {}
+						await Bun.sleep(1000);
+					}
+					expect(result.trim()).toBe("init-completed");
+				} finally {
+					await rmFile(tmpScript, { force: true });
+				}
+			},
+			{ timeout: 150000 },
+		);
+
+		test(
+			"init script has access to env vars",
+			async () => {
+				const tmpScript = join(tmpdir(), `scalebox-init-env-${Date.now()}.sh`);
+				await writeFileHelper(
+					tmpScript,
+					'#!/bin/bash\necho "$MY_TEST_VAR" > /home/user/env-from-init.txt\nchown 1000:1000 /home/user/env-from-init.txt\n',
+				);
+
+				try {
+					const vm = await sbVmCreateWithInit("debian-base", {
+						env: ["MY_TEST_VAR=hello-from-env"],
+						initScript: tmpScript,
+					});
+					createdVmIds.push(vm.id as string);
+
+					await waitForSsh(vm.ssh_port as number, 90000);
+					let result = "";
+					for (let i = 0; i < 30; i++) {
+						try {
+							result = await sshExec(
+								vm.ssh_port as number,
+								"cat /home/user/env-from-init.txt 2>/dev/null || echo PENDING",
+							);
+							if (result.trim() !== "PENDING") break;
+						} catch {}
+						await Bun.sleep(1000);
+					}
+					expect(result.trim()).toBe("hello-from-env");
+				} finally {
+					await rmFile(tmpScript, { force: true });
+				}
+			},
+			{ timeout: 150000 },
+		);
+
+		test(
+			"init script removed after execution",
+			async () => {
+				const tmpScript = join(tmpdir(), `scalebox-init-cleanup-${Date.now()}.sh`);
+				await writeFileHelper(
+					tmpScript,
+					"#!/bin/bash\necho done > /home/user/init-done.txt\nchown 1000:1000 /home/user/init-done.txt\n",
+				);
+
+				try {
+					const vm = await sbVmCreateWithInit("debian-base", {
+						initScript: tmpScript,
+					});
+					createdVmIds.push(vm.id as string);
+
+					await waitForSsh(vm.ssh_port as number, 90000);
+					for (let i = 0; i < 30; i++) {
+						try {
+							const done = await sshExec(
+								vm.ssh_port as number,
+								"cat /home/user/init-done.txt 2>/dev/null || echo PENDING",
+							);
+							if (done.trim() !== "PENDING") break;
+						} catch {}
+						await Bun.sleep(1000);
+					}
+
+					const scriptExists = await sshExec(
+						vm.ssh_port as number,
+						"test -f /opt/scalebox/init.sh && echo exists || echo gone",
+					);
+					expect(scriptExists.trim()).toBe("gone");
+
+					const serviceEnabled = await sshExec(
+						vm.ssh_port as number,
+						"systemctl is-enabled scalebox-init.service 2>/dev/null; true",
+					);
+					expect(serviceEnabled.trim()).toBe("disabled");
+				} finally {
+					await rmFile(tmpScript, { force: true });
+				}
+			},
+			{ timeout: 150000 },
+		);
 
 		test.skip("env, files, and init script work together", async () => {
 			// Criterion #6

@@ -32,6 +32,7 @@ export interface CreateVMRequest {
 	disk_size_gib?: number; // defaults to template size
 	env?: Record<string, string>;
 	files?: Array<{ path: string; content: string }>;
+	init_script?: string;
 }
 
 export interface SnapshotRequest {

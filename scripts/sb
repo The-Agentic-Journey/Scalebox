@@ -341,6 +341,7 @@ cmd_vm_create() {
   local disk="" mem=""
   local env_args=()
   local file_args=()
+  local init_script_b64=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -364,6 +365,12 @@ cmd_vm_create() {
         ;;
       --env) env_args+=("$2"); shift 2 ;;
       --file) file_args+=("$2"); shift 2 ;;
+      --init-script)
+        local script_file="$2"
+        [[ -f "$script_file" ]] || die "Init script not found: $script_file"
+        init_script_b64=$(base64 < "$script_file" | tr -d '\n')
+        shift 2
+        ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -402,6 +409,9 @@ cmd_vm_create() {
       files_json=$(echo "$files_json" | jq --arg p "$fpath" --arg c "$fb64" '. + [{path: $p, content: $c}]')
     done
     json_body=$(echo "$json_body" | jq --argjson f "$files_json" '. + {files: $f}')
+  fi
+  if [[ -n "$init_script_b64" ]]; then
+    json_body=$(echo "$json_body" | jq --arg s "$init_script_b64" '. + {init_script: $s}')
   fi
 
   local response
@@ -736,6 +746,7 @@ cmd_go() {
   local disk="" mem=""
   local env_args=()
   local file_args=()
+  local init_script_b64=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -759,6 +770,12 @@ cmd_go() {
         ;;
       --env) env_args+=("$2"); shift 2 ;;
       --file) file_args+=("$2"); shift 2 ;;
+      --init-script)
+        local script_file="$2"
+        [[ -f "$script_file" ]] || die "Init script not found: $script_file"
+        init_script_b64=$(base64 < "$script_file" | tr -d '\n')
+        shift 2
+        ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -797,6 +814,9 @@ cmd_go() {
       files_json=$(echo "$files_json" | jq --arg p "$fpath" --arg c "$fb64" '. + [{path: $p, content: $c}]')
     done
     json_body=$(echo "$json_body" | jq --argjson f "$files_json" '. + {files: $f}')
+  fi
+  if [[ -n "$init_script_b64" ]]; then
+    json_body=$(echo "$json_body" | jq --arg s "$init_script_b64" '. + {init_script: $s}')
   fi
 
   local response
