@@ -222,9 +222,18 @@ describe("Firecracker API", () => {
 		{ timeout: 90000 },
 	);
 
-	test.skip("VM hostname matches generated name", async () => {
-		// Create VM, SSH in, run hostname, compare to vm.name
-	});
+	test(
+		"VM hostname matches generated name",
+		async () => {
+			const vm = await sbVmCreate("debian-base");
+			createdVmIds.push(vm.id as string);
+
+			await waitForSsh(vm.ssh_port as number, 90000);
+			const hostname = await sshExec(vm.ssh_port as number, "hostname");
+			expect(hostname.trim()).toBe(vm.name);
+		},
+		{ timeout: 90000 },
+	);
 
 	// === Phase 6: Snapshots ===
 	test(
