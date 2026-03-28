@@ -58,6 +58,39 @@ export async function injectSshKey(rootfsPath: string, sshPublicKey: string): Pr
 	}
 }
 
+export async function setHostname(rootfsPath: string, hostname: string): Promise<void> {
+	const mountPoint = `/tmp/mount-${Date.now()}`;
+	await mkdir(mountPoint, { recursive: true });
+
+	try {
+		await $`sudo mount -o loop ${rootfsPath} ${mountPoint}`;
+
+		// Write /etc/hostname
+		const tempFile = `/tmp/hostname_${Date.now()}`;
+		await writeFile(tempFile, `${hostname}\n`);
+		await $`sudo cp ${tempFile} ${mountPoint}/etc/hostname`;
+		await $`rm -f ${tempFile}`;
+
+		// Update /etc/hosts — remove any existing 127.0.1.1 line and add new one
+		await $`sudo sed -i '/^127\\.0\\.1\\.1/d' ${mountPoint}/etc/hosts`.quiet().nothrow();
+		const tempHostsLine = `/tmp/hosts_line_${Date.now()}`;
+		await writeFile(tempHostsLine, `127.0.1.1\t${hostname}\n`);
+		await $`cat ${tempHostsLine} | sudo tee -a ${mountPoint}/etc/hosts`.quiet();
+		await $`rm -f ${tempHostsLine}`;
+	} finally {
+		try {
+			await $`sudo umount ${mountPoint}`;
+		} catch {
+			// Ignore unmount errors
+		}
+		try {
+			await $`rmdir ${mountPoint}`.quiet();
+		} catch {
+			// Ignore rmdir errors
+		}
+	}
+}
+
 export async function deleteRootfs(rootfsPath: string): Promise<void> {
 	try {
 		await $`rm -f ${rootfsPath}`.quiet();

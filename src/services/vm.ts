@@ -31,6 +31,7 @@ import {
 	deleteRootfs,
 	injectSshKey,
 	resizeRootfs,
+	setHostname,
 } from "./storage";
 import { startUdpProxy, stopUdpProxy } from "./udpProxy";
 
@@ -220,6 +221,12 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 		// Inject SSH key
 		console.log(`[${vmId}] Injecting SSH key...`);
 		await injectSshKey(rootfsPath, req.ssh_public_key);
+
+		// Set hostname to VM name
+		if (name) {
+			console.log(`[${vmId}] Setting hostname to ${name}...`);
+			await setHostname(rootfsPath, name);
+		}
 
 		// Create TAP device
 		console.log(`[${vmId}] Creating TAP device ${tapDevice}...`);
