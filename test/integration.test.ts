@@ -239,9 +239,29 @@ describe("Firecracker API", () => {
 	);
 
 	// === Swap ===
-	test.skip("VM has swap enabled", async () => {
-		// Create VM, SSH in, check swapon --show
-	});
+	test(
+		"VM has swap enabled",
+		async () => {
+			const vm = await sbVmCreate("debian-base");
+			createdVmIds.push(vm.id as string);
+
+			await waitForSsh(vm.ssh_port as number, 90000);
+			const output = await sshExec(
+				vm.ssh_port as number,
+				"/usr/sbin/swapon --show=NAME,SIZE --noheadings --bytes",
+			);
+			// Expected output: /swapfile <size_in_bytes>
+			expect(output.trim()).not.toBe("");
+			const fields = output.trim().split(/\s+/);
+			expect(fields[0]).toBe("/swapfile");
+			// Size in bytes — 2048 MiB = 2147483648 bytes.
+			// mkswap reserves a small header (~4 KiB), so usable size is slightly less.
+			const sizeBytes = Number.parseInt(fields[1], 10);
+			expect(sizeBytes).toBeGreaterThan(2147483648 - 1024 * 1024);
+			expect(sizeBytes).toBeLessThanOrEqual(2147483648);
+		},
+		{ timeout: 90000 },
+	);
 
 	test("info returns default_swap_size_mib", async () => {
 		const status = await sbStatus();
