@@ -227,12 +227,25 @@ export async function sbVmWait(nameOrId: string, timeoutSec = 60): Promise<void>
 export async function sbVmSnapshot(
 	nameOrId: string,
 	templateName: string,
+	options?: { overwrite?: boolean },
 ): Promise<Record<string, unknown>> {
-	const result = await sbCmd("vm", "snapshot", nameOrId, "-n", templateName);
+	const args = ["vm", "snapshot", nameOrId, "-n", templateName];
+	if (options?.overwrite) args.push("--overwrite");
+	const result = await sbCmd(...args);
 	if (result.exitCode !== 0 || !result.data) {
 		throw new Error(`Failed to snapshot VM: ${result.error}`);
 	}
 	return result.data;
+}
+
+export async function sbVmSnapshotRaw(
+	nameOrId: string,
+	templateName: string,
+	options?: { overwrite?: boolean },
+): Promise<{ exitCode: number; data: Record<string, unknown> | null; error: string | null }> {
+	const args = ["vm", "snapshot", nameOrId, "-n", templateName];
+	if (options?.overwrite) args.push("--overwrite");
+	return sbCmd(...args);
 }
 
 export async function sbTemplateList(): Promise<Record<string, unknown>[]> {

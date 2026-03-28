@@ -18,6 +18,7 @@ import {
 	sbVmGet,
 	sbVmList,
 	sbVmSnapshot,
+	sbVmSnapshotRaw,
 	sbVmWait,
 	sshExec,
 	waitForSsh,
@@ -65,6 +66,10 @@ describe("Firecracker API", () => {
 	test("auth rejects invalid token", async () => {
 		const { status } = await api.getRaw("/templates", "wrong-token");
 		expect(status).toBe(401);
+	});
+
+	test.skip("info returns base_image", async () => {
+		// GET /info, check base_image field exists
 	});
 
 	// === CLI Connect Command ===
@@ -217,6 +222,10 @@ describe("Firecracker API", () => {
 		{ timeout: 90000 },
 	);
 
+	test.skip("VM hostname matches generated name", async () => {
+		// Create VM, SSH in, run hostname, compare to vm.name
+	});
+
 	// === Phase 6: Snapshots ===
 	test(
 		"snapshot VM creates template",
@@ -314,6 +323,15 @@ describe("Firecracker API", () => {
 		},
 		{ timeout: 150000 },
 	);
+
+	// === Snapshot Overwrite ===
+	test.skip("snapshot existing template returns 409", async () => {
+		// Create VM, snapshot, attempt duplicate snapshot → 409
+	});
+
+	test.skip("snapshot with overwrite replaces existing template", async () => {
+		// Create VM, snapshot, overwrite snapshot → 201
+	});
 
 	// === Phase 7: Cleanup ===
 	test(
