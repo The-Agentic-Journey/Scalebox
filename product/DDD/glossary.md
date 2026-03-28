@@ -103,6 +103,12 @@ A btrfs feature enabling instant, space-efficient file copies via copy-on-write.
 ### COW (Copy-on-Write)
 Storage optimization where copies share data until modified. Enables fast VM creation without duplicating entire disk images.
 
+### Base Image (BASE_IMAGE)
+The Docker image used as the source for building the base template. Configured via `BASE_IMAGE` in `/etc/scaleboxd/config`. Default: `ghcr.io/the-agentic-journey/agenticbaseimage:latest`. The image is pulled and extracted using `crane` during template creation.
+
+### crane
+A CLI tool from Google's go-containerregistry project used to pull and export Docker images without requiring a Docker daemon. Installed at `/usr/local/bin/crane`. Used by `template-build.sh` to convert a Docker image into a rootfs directory.
+
 ### ACME Staging
 Let's Encrypt's staging environment for testing certificate issuance. Unlike the production ACME server, the staging environment has no rate limits, making it ideal for testing and development. Certificates issued by the staging environment are **not browser-trusted** (they are signed by a fake root CA), but they verify that the ACME flow works correctly.
 
@@ -142,13 +148,13 @@ List of template names that cannot be deleted via API. Default: `["debian-base"]
 ## Process Terms
 
 ### VM Creation
-The orchestrated process of: allocate resources → copy rootfs → inject SSH key → create TAP → start Firecracker → start proxy.
+The orchestrated process of: allocate resources → copy rootfs → inject SSH key → set hostname → create TAP → start Firecracker → start proxy.
 
 ### VM Deletion
 The cleanup process of: stop proxy → kill Firecracker → delete TAP → delete rootfs → release resources.
 
 ### VM Snapshotting
-The process of: pause VM → copy rootfs to templates → resume VM → clear SSH keys from template.
+The process of: pause VM → copy rootfs to templates → resume VM → clear SSH keys from template. If the target template already exists, the API returns 409 unless `overwrite: true` is specified, in which case the existing template is replaced. Protected templates cannot be overwritten.
 
 ---
 
@@ -199,7 +205,7 @@ The `sb connect` command that establishes a mosh (or SSH fallback) session to a 
 A version number stored in `debian-base.version` that tracks template contents. Incremented when template packages change (e.g., when mosh was added). Used by `scalebox-update` to detect when templates need rebuilding.
 
 ### Template Rebuild
-The process of recreating a template with updated packages using `scalebox-rebuild-template`. Required after updates that add new packages to the base template. Running VMs are not affected due to btrfs copy-on-write - they continue using their existing rootfs copies while new VMs use the updated template.
+The process of recreating the base template from the configured Docker image using `scalebox-rebuild-template`. The Docker image is pulled via `crane`, extracted to a rootfs directory, and packaged as an ext4 image. Running VMs are not affected due to btrfs copy-on-write.
 
 ### Orphaned Resource
 A system resource (Firecracker process, TAP device, rootfs file) that exists on the host but is not tracked in scaleboxd's in-memory VM state. Orphans occur when state.json is missing, corrupted, or predates the state persistence feature (plan 018). Orphaned resources are automatically discovered and cleaned up on startup by the reconciliation process.
