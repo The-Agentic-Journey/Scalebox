@@ -17,6 +17,8 @@ SERVICE_FILE="/etc/systemd/system/scaleboxd.service"
 HEALTH_URL="http://localhost:8080/health"
 HEALTH_RETRIES=15
 HEALTH_DELAY=2
+CRANE_VERSION="0.20.3"
+CRANE_URL="https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
 
 log() { echo "[scalebox-update] $1"; }
 die() { echo "[scalebox-update] ERROR: $1" >&2; exit 1; }
@@ -184,6 +186,26 @@ upgrade_kernel() {
   else
     rm -f "${kernel_path}.new"
     log "WARNING: Kernel download failed. Continuing with current kernel."
+  fi
+}
+
+install_crane() {
+  local crane_bin="/usr/local/bin/crane"
+
+  if [[ -f "$crane_bin" ]]; then
+    return
+  fi
+
+  log "Installing crane v${CRANE_VERSION}..."
+  if wget -q "$CRANE_URL" -O /tmp/crane.tar.gz; then
+    tar -xzf /tmp/crane.tar.gz -C /tmp crane
+    mv /tmp/crane "$crane_bin"
+    chmod +x "$crane_bin"
+    rm -f /tmp/crane.tar.gz
+    log "crane installed"
+  else
+    rm -f /tmp/crane.tar.gz
+    log "WARNING: crane download failed. Template rebuild will require crane."
   fi
 }
 
@@ -377,10 +399,20 @@ migrate_host_ip() {
   fi
 }
 
+migrate_base_image() {
+  local config_file="/etc/scaleboxd/config"
+  if ! grep -q "^BASE_IMAGE=" "$config_file" 2>/dev/null; then
+    echo "BASE_IMAGE=ghcr.io/the-agentic-journey/agenticbaseimage:latest" >> "$config_file"
+    log "Added BASE_IMAGE to config"
+  fi
+}
+
 run_migrations() {
   upgrade_kernel
+  install_crane
   migrate_config_to_base_domain
   migrate_host_ip
+  migrate_base_image
   free_port_53
   migrate_caddy_binary
   migrate_caddy_config

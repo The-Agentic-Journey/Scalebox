@@ -39,6 +39,7 @@ app.get("/info", async (c) => {
 	return c.json({
 		host_ip: hostIp,
 		base_domain: config.baseDomain,
+		base_image: config.baseImage,
 		templates_count: templates.length,
 		vms_count: vmList.length,
 		storage: {

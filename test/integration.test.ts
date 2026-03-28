@@ -68,8 +68,11 @@ describe("Firecracker API", () => {
 		expect(status).toBe(401);
 	});
 
-	test.skip("info returns base_image", async () => {
-		// GET /info, check base_image field exists
+	test("info returns base_image", async () => {
+		const status = await sbStatus();
+		expect(status.base_image).toBeDefined();
+		expect(typeof status.base_image).toBe("string");
+		expect((status.base_image as string).length).toBeGreaterThan(0);
 	});
 
 	// === CLI Connect Command ===
