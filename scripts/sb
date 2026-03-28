@@ -643,16 +643,19 @@ cmd_connect() {
   # - LogLevel=ERROR: Suppress "Permanently added ... to known hosts" warning
   local base_ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
+  # Always attach to (or create) a tmux session on the remote VM
+  local tmux_cmd="tmux new-session -A -s main"
+
   if [[ "$use_ssh" == "true" ]]; then
     # Direct SSH connection (fallback if mosh doesn't work)
     # Note: ${ssh_opts[@]+...} handles empty array on bash 3.2 (macOS) with set -u
-    exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} "${user}@${ssh_host}"
+    exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} -t "${user}@${ssh_host}" "$tmux_cmd"
   else
     # Check mosh is installed locally
     if ! command -v mosh &>/dev/null; then
       echo "mosh not installed locally, falling back to SSH..." >&2
       echo "Install mosh for better experience: apt install mosh (or brew install mosh)" >&2
-      exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} "${user}@${ssh_host}"
+      exec ssh -p "$ssh_port" -i "$identity" $base_ssh_opts ${ssh_opts[@]+"${ssh_opts[@]}"} -t "${user}@${ssh_host}" "$tmux_cmd"
     fi
 
     # Note: If mosh-server is missing on the VM, mosh will fail with:
@@ -671,9 +674,9 @@ cmd_connect() {
       ssh_cmd+=" $(printf '%q' "$opt")"
     done
 
-    # Connect via mosh
+    # Connect via mosh, launching into tmux on the remote side
     # --port tells mosh-server which port to use AND which port client connects to
-    exec mosh --ssh="$ssh_cmd" --port="$ssh_port" "${user}@${ssh_host}"
+    exec mosh --ssh="$ssh_cmd" --port="$ssh_port" "${user}@${ssh_host}" -- $tmux_cmd
   fi
 }
 
