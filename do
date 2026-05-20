@@ -97,17 +97,52 @@ create_vm() {
   VM_NAME="scalebox-test-$(date +%s)-$$-$RANDOM"
   echo "==> Creating VM: $VM_NAME"
 
-  gcloud compute instances create "$VM_NAME" \
-    --zone="$GCLOUD_ZONE" \
-    --project="$GCLOUD_PROJECT" \
-    --machine-type=n2-standard-2 \
-    --image-family=debian-12 \
-    --image-project=debian-cloud \
-    --boot-disk-size=50GB \
-    --boot-disk-type=pd-ssd \
-    --enable-nested-virtualization \
-    --tags=scalebox-test \
-    --quiet
+  # Try the configured zone first, then sibling zones in us-central1 to ride out
+  # transient ZONE_RESOURCE_POOL_EXHAUSTED capacity dips. Set GCLOUD_ZONE_FORCE=1
+  # to pin to a single zone and disable the fallback.
+  local zones=()
+  if [[ "${GCLOUD_ZONE_FORCE:-}" == "1" ]]; then
+    zones=("$GCLOUD_ZONE")
+  else
+    local raw=("$GCLOUD_ZONE" us-central1-a us-central1-b us-central1-c us-central1-f)
+    local seen=" "
+    for z in "${raw[@]}"; do
+      if [[ "$seen" != *" $z "* ]]; then
+        zones+=("$z")
+        seen+="$z "
+      fi
+    done
+  fi
+
+  local created=""
+  local create_err=""
+  for z in "${zones[@]}"; do
+    echo "==> Attempting zone: $z"
+    if create_err=$(gcloud compute instances create "$VM_NAME" \
+        --zone="$z" \
+        --project="$GCLOUD_PROJECT" \
+        --machine-type=n2-standard-2 \
+        --image-family=debian-12 \
+        --image-project=debian-cloud \
+        --boot-disk-size=50GB \
+        --boot-disk-type=pd-ssd \
+        --enable-nested-virtualization \
+        --tags=scalebox-test \
+        --quiet 2>&1); then
+      GCLOUD_ZONE="$z"
+      created="yes"
+      echo "==> Created in zone: $GCLOUD_ZONE"
+      break
+    fi
+    if [[ "$create_err" == *"ZONE_RESOURCE_POOL_EXHAUSTED"* ]]; then
+      echo "==> Zone $z exhausted, trying next..."
+      continue
+    fi
+    echo "$create_err" >&2
+    die "VM creation failed in zone $z (not a capacity issue)"
+  done
+
+  [[ -n "$created" ]] || die "VM creation failed in all zones (capacity exhausted everywhere)"
 
   VM_IP=$(gcloud compute instances describe "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
