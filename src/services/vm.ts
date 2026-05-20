@@ -1,15 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { stat, unlink } from "node:fs/promises";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { rm, stat, unlink } from "node:fs/promises";
 import { config } from "../config";
 import type { CreateVMRequest, SnapshotResponse, VM, VMResponse } from "../types";
+import { unwatchConsole } from "./consoleScanner";
 import {
 	buildKernelArgs,
+	consoleLogDir,
+	consoleLogPath,
 	pauseVm,
 	resumeVm,
 	startFirecracker,
 	stopFirecracker,
 } from "./firecracker";
+import { isDegraded, removeVm as removeVmMetrics } from "./metrics";
 import { generateUniqueName } from "./nameGenerator";
 import {
 	allocateIp,
@@ -89,6 +93,12 @@ async function cleanupDeadVm(saved: PersistedVM): Promise<void> {
 	// Clean up rootfs
 	try {
 		await deleteRootfs(saved.rootfsPath);
+	} catch {}
+
+	// Stop console scanner (in case recovery had started it) and clean up log dir
+	unwatchConsole(saved.id);
+	try {
+		await rm(consoleLogDir(saved.id), { recursive: true, force: true });
 	} catch {}
 }
 
@@ -321,17 +331,31 @@ export async function deleteVm(vm: VM): Promise<void> {
 	// Delete rootfs
 	await deleteRootfs(vm.rootfsPath);
 
+	// Stop console scanner and delete log directory
+	unwatchConsole(vm.id);
+	try {
+		await rm(consoleLogDir(vm.id), { recursive: true, force: true });
+	} catch {}
+
 	// Release resources
 	releaseIp(vm.ip);
 	releasePort(vm.port);
 
 	// Remove from state
 	vms.delete(vm.id);
+	removeVmMetrics(vm.id);
 	saveState();
 }
 
 export function vmToResponse(vm: VM): VMResponse {
 	const url = config.baseDomain ? `https://${vm.name}.vm.${config.baseDomain}` : null;
+	const logPath = consoleLogPath(vm.id);
+	let logSize = 0;
+	try {
+		logSize = statSync(logPath).size;
+	} catch {
+		// File may not exist yet (recovered VM, or pre-existing one)
+	}
 	return {
 		id: vm.id,
 		name: vm.name,
@@ -342,6 +366,9 @@ export function vmToResponse(vm: VM): VMResponse {
 		url,
 		status: "running",
 		created_at: vm.createdAt.toISOString(),
+		console_log_path: logPath,
+		console_log_size: logSize,
+		degraded: isDegraded(vm.id),
 	};
 }
 

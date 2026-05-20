@@ -328,8 +328,8 @@ do_build() {
   rm -rf builds
   mkdir -p builds
 
-  # Compile server
-  "$BUN_BIN" build src/index.ts --compile --outfile builds/scaleboxd
+  # Compile server (always target Linux x64 — the only deployment target)
+  "$BUN_BIN" build src/index.ts --compile --target=bun-linux-x64 --outfile builds/scaleboxd
 
   # Verify binary was created
   [[ -f builds/scaleboxd ]] || die "Failed to compile scaleboxd"

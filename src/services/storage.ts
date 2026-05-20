@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { $ } from "bun";
 import { config } from "../config";
+import { injectHealthAgent } from "./agent";
 
 export interface InitializeRootfsOptions {
 	sshPublicKey: string;
@@ -153,6 +154,9 @@ WantedBy=multi-user.target
 			await $`sudo mkdir -p ${mountPoint}/etc/systemd/system/multi-user.target.wants`;
 			await $`sudo ln -sf /etc/systemd/system/scalebox-init.service ${mountPoint}/etc/systemd/system/multi-user.target.wants/scalebox-init.service`;
 		}
+
+		// 7. In-guest health snapshot agent (always injected — see plan 031)
+		await injectHealthAgent(mountPoint);
 	} finally {
 		try {
 			await $`sudo umount ${mountPoint}`;

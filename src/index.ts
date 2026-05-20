@@ -3,6 +3,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
 import { updateCaddyConfig } from "./services/caddy";
 import { deleteAcmeTxtRecord, setAcmeTxtRecord, startDnsServer } from "./services/dns";
+import { snapshot as metricsSnapshot, summaryLine as metricsSummaryLine } from "./services/metrics";
 import { reconcileOrphans } from "./services/reconcile";
 import { getCpuUsage, getMemoryStats, getStorageStats } from "./services/system";
 import { deleteTemplate, listTemplates } from "./services/template";
@@ -210,6 +211,13 @@ app.delete("/vms/:id", async (c) => {
 	return c.body(null, 204);
 });
 
+app.get("/metrics", (c) => {
+	return c.json({
+		...metricsSnapshot(),
+		vm_count: vms.size,
+	});
+});
+
 app.post("/vms/:id/snapshot", async (c) => {
 	const vm = findVm(c.req.param("id"));
 	if (!vm) return c.json({ error: "VM not found" }, 404);
@@ -256,9 +264,18 @@ updateCaddyConfig().then(() => {
 	console.log(`Scaleboxd started on http://${host}:${config.apiPort}`);
 });
 
+// Periodic metrics summary so a leak / degradation is visible in the journal
+const metricsInterval = setInterval(
+	() => {
+		console.log(metricsSummaryLine());
+	},
+	5 * 60 * 1000,
+);
+
 // Add SIGTERM handler for graceful shutdown
 process.on("SIGTERM", () => {
 	console.log("Received SIGTERM, saving state...");
+	clearInterval(metricsInterval);
 	saveState();
 	process.exit(0);
 });

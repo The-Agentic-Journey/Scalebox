@@ -1,5 +1,7 @@
+import { mkdir, rename, stat } from "node:fs/promises";
 import { $ } from "bun";
 import { config } from "../config";
+import { watchConsole } from "./consoleScanner";
 
 interface FirecrackerConfig {
 	socketPath: string;
@@ -12,6 +14,16 @@ interface FirecrackerConfig {
 	memSizeMib: number;
 }
 
+const CONSOLE_LOG_ROTATE_BYTES = 50 * 1024 * 1024; // 50 MB
+
+export function consoleLogDir(vmId: string): string {
+	return `${config.dataDir}/logs/${vmId}`;
+}
+
+export function consoleLogPath(vmId: string): string {
+	return `${consoleLogDir(vmId)}/console.log`;
+}
+
 export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> {
 	// Remove old socket if it exists
 	try {
@@ -22,7 +34,9 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 
 	// Extract vmId from socket path (e.g., /tmp/firecracker-abc123.sock -> abc123)
 	const vmId = cfg.socketPath.replace("/tmp/firecracker-", "").replace(".sock", "");
-	const logPath = `/tmp/fc-${vmId}-console.log`;
+	const logDir = consoleLogDir(vmId);
+	const logPath = consoleLogPath(vmId);
+	await mkdir(logDir, { recursive: true });
 
 	// Start Firecracker process with console output captured to log file
 	const proc = Bun.spawn(["firecracker", "--api-sock", cfg.socketPath], {
@@ -30,11 +44,27 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 		stderr: "pipe",
 	});
 
-	// Pipe stdout and stderr to log file for debugging VM console output
-	const logFile = Bun.file(logPath);
-	const logWriter = logFile.writer();
+	// Pipe stdout and stderr to log file for debugging VM console output.
+	// Track bytes written so we can rotate when the file exceeds the cap —
+	// keeps a single .1 backup so disk usage stays bounded.
+	let logWriter = Bun.file(logPath).writer();
+	let bytesSinceCheck = 0;
 
-	// Async function to stream output to log file
+	const rotateIfNeeded = async () => {
+		if (bytesSinceCheck < 1024 * 1024) return; // check at most every ~1 MB
+		bytesSinceCheck = 0;
+		try {
+			const s = await stat(logPath);
+			if (s.size >= CONSOLE_LOG_ROTATE_BYTES) {
+				await logWriter.end();
+				await rename(logPath, `${logPath}.1`);
+				logWriter = Bun.file(logPath).writer();
+			}
+		} catch {
+			// stat / rename can race with VM exit; safe to ignore
+		}
+	};
+
 	const pipeToLog = async (stream: ReadableStream<Uint8Array> | null) => {
 		if (!stream) return;
 		const reader = stream.getReader();
@@ -45,6 +75,8 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 				if (value) {
 					logWriter.write(value);
 					logWriter.flush();
+					bytesSinceCheck += value.byteLength;
+					await rotateIfNeeded();
 				}
 			}
 		} catch {
@@ -55,6 +87,9 @@ export async function startFirecracker(cfg: FirecrackerConfig): Promise<number> 
 	// Start piping in background (don't await)
 	pipeToLog(proc.stdout);
 	pipeToLog(proc.stderr);
+
+	// Watch the console log for kernel catastrophe patterns
+	watchConsole(vmId, logPath);
 
 	console.log(`VM console output being captured to: ${logPath}`);
 

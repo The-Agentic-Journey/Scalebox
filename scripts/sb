@@ -327,8 +327,22 @@ cmd_vm_list() {
   need_config
   local response
   if response=$(api GET /vms); then
-    # Note: adds .name column (not in old scalebox CLI which showed: id, template, ip, ssh_port)
-    echo "$response" | output_table '.vms[] | [.name, .id, .template, .ip, .ssh_port] | @tsv' $'NAME\tID\tTEMPLATE\tIP\tPORT'
+    # AGE is rendered as Nd/Nh/Nm (largest unit), STATUS reflects scaleboxd's
+    # health view of the VM (degraded = repeated proxy connect failures).
+    local jq_filter='.vms[] | [
+      .name,
+      .id,
+      .template,
+      .ip,
+      .ssh_port,
+      (((now - (.created_at | sub("\\..+Z$"; "Z") | fromdateiso8601)) | floor) as $s |
+        if $s >= 86400 then (($s / 86400) | floor | tostring) + "d"
+        elif $s >= 3600 then (($s / 3600) | floor | tostring) + "h"
+        elif $s >= 60 then (($s / 60) | floor | tostring) + "m"
+        else ($s | tostring) + "s" end),
+      (if .degraded then "degraded" else "running" end)
+    ] | @tsv'
+    echo "$response" | output_table "$jq_filter" $'NAME\tID\tTEMPLATE\tIP\tPORT\tAGE\tSTATUS'
   else
     echo "$response"
     return 1

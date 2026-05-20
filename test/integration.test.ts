@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import {
 	API_BASE_URL,
+	API_TOKEN,
 	TEST_PUBLIC_KEY,
 	VM_HOST,
 	VM_IP,
@@ -715,5 +716,147 @@ describe("Firecracker API", () => {
 	test.skip("ACME proxy endpoints manage TXT records", async () => {
 		// Verified end-to-end: if HTTPS works (criterion #6), the ACME proxy worked.
 		// Direct testing would require the ACME proxy password from the server config.
+	});
+
+	// === Observability: metrics + degradation ===
+	describe("Metrics endpoint", () => {
+		test("returns process memory and per-vm counters", async () => {
+			const res = await fetch(`${API_BASE_URL}/metrics`, {
+				headers: { Authorization: `Bearer ${API_TOKEN}` },
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				uptime_seconds: number;
+				process: { rss: number; heap_used: number };
+				vms: Record<string, unknown>;
+				vm_count: number;
+			};
+			expect(body.uptime_seconds).toBeGreaterThanOrEqual(0);
+			expect(body.process.rss).toBeGreaterThan(0);
+			expect(body.process.heap_used).toBeGreaterThan(0);
+			expect(typeof body.vms).toBe("object");
+			expect(typeof body.vm_count).toBe("number");
+		});
+
+		test("requires bearer token", async () => {
+			const res = await fetch(`${API_BASE_URL}/metrics`);
+			expect(res.status).toBe(401);
+		});
+
+		test(
+			"connection counters increment for a real VM",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				const vmId = vm.id as string;
+				createdVmIds.push(vmId);
+				await waitForSsh(vm.ssh_port as number, 90000);
+
+				// SSH already opened/closed a connection by way of waitForSsh.
+				const res = await fetch(`${API_BASE_URL}/metrics`, {
+					headers: { Authorization: `Bearer ${API_TOKEN}` },
+				});
+				const body = (await res.json()) as {
+					vms: Record<string, { connections_accepted: number; vm_connect_successes: number }>;
+				};
+				const c = body.vms[vmId];
+				expect(c).toBeDefined();
+				expect(c.connections_accepted).toBeGreaterThan(0);
+				expect(c.vm_connect_successes).toBeGreaterThan(0);
+
+				// Healthy VM should not be marked degraded
+				const detail = await sbVmGet(vmId);
+				expect(detail?.degraded).toBe(false);
+			},
+			{ timeout: 120000 },
+		);
+	});
+
+	// === Observability: In-guest health agent ===
+	describe("Health agent", () => {
+		test(
+			"scalebox-health.timer is active in new VM",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				await waitForSsh(vm.ssh_port as number, 90000);
+
+				const status = await sshExec(
+					vm.ssh_port as number,
+					"systemctl is-active scalebox-health.timer",
+				);
+				expect(status.trim()).toBe("active");
+			},
+			{ timeout: 120000 },
+		);
+
+		test(
+			"scalebox-health.log accumulates entries within 90s",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				await waitForSsh(vm.ssh_port as number, 90000);
+
+				// OnBootSec=30s + OnUnitActiveSec=60s — wait up to 120s for first entry
+				let count = 0;
+				for (let i = 0; i < 60; i++) {
+					try {
+						const out = await sshExec(
+							vm.ssh_port as number,
+							"sudo grep -c '^=== ' /var/log/scalebox-health.log 2>/dev/null || echo 0",
+						);
+						count = Number(out.trim());
+						if (count > 0) break;
+					} catch {}
+					await Bun.sleep(2000);
+				}
+				expect(count).toBeGreaterThan(0);
+			},
+			{ timeout: 240000 },
+		);
+	});
+
+	// === Observability: Persistent console logs ===
+	describe("Console logs", () => {
+		test(
+			"console log persists under /var/lib/scalebox/logs and grows",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+
+				expect(vm.console_log_path).toMatch(
+					new RegExp(`^/var/lib/scalebox/logs/${vm.id}/console\\.log$`),
+				);
+
+				// Wait briefly for Firecracker to emit boot output
+				let size = 0;
+				for (let i = 0; i < 20; i++) {
+					const detail = await sbVmGet(vm.id as string);
+					size = (detail?.console_log_size as number) ?? 0;
+					if (size > 0) break;
+					await Bun.sleep(500);
+				}
+				expect(size).toBeGreaterThan(0);
+			},
+			{ timeout: 60000 },
+		);
+
+		test(
+			"console log dir removed on vm delete",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				const vmId = vm.id as string;
+				// Don't push to createdVmIds — we delete it explicitly below
+
+				const logPath = vm.console_log_path as string;
+				expect(logPath).toContain(vmId);
+
+				await sbVmDelete(vmId);
+
+				// After delete, GET should 404 (the VM is gone, hence its log dir too)
+				const after = await sbVmGet(vmId);
+				expect(after).toBe(null);
+			},
+			{ timeout: 60000 },
+		);
 	});
 });

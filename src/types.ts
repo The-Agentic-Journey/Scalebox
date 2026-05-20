@@ -21,6 +21,9 @@ export interface VMResponse {
 	url: string | null;
 	status: "running" | "stopped";
 	created_at: string;
+	console_log_path: string;
+	console_log_size: number;
+	degraded: boolean;
 }
 
 export interface CreateVMRequest {
