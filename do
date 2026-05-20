@@ -97,31 +97,50 @@ create_vm() {
   VM_NAME="scalebox-test-$(date +%s)-$$-$RANDOM"
   echo "==> Creating VM: $VM_NAME"
 
-  # Try the configured zone first, then sibling zones in us-central1 to ride out
-  # transient ZONE_RESOURCE_POOL_EXHAUSTED capacity dips. Set GCLOUD_ZONE_FORCE=1
-  # to pin to a single zone and disable the fallback.
-  local zones=()
+  # Build a (machine-type, zone) attempt list to ride out
+  # ZONE_RESOURCE_POOL_EXHAUSTED. Prefer Intel n2 (the established choice),
+  # then fall back to AMD n2d which usually has separate capacity. Prefer the
+  # configured region, then expand to other US regions.
+  #
+  # GCLOUD_ZONE_FORCE=1 pins to the single configured zone + machine type.
+  # GCLOUD_MACHINE_TYPE overrides the primary machine type.
+  local primary_type="${GCLOUD_MACHINE_TYPE:-n2-standard-2}"
+  local fallback_type="n2d-standard-2"
+
+  local attempts=()
   if [[ "${GCLOUD_ZONE_FORCE:-}" == "1" ]]; then
-    zones=("$GCLOUD_ZONE")
+    attempts=("$primary_type:$GCLOUD_ZONE")
   else
-    local raw=("$GCLOUD_ZONE" us-central1-a us-central1-b us-central1-c us-central1-f)
+    local zones_primary=("$GCLOUD_ZONE" us-central1-a us-central1-b us-central1-c us-central1-f)
+    local zones_other=(us-west1-a us-west1-b us-west1-c us-east1-b us-east1-c us-east1-d)
     local seen=" "
-    for z in "${raw[@]}"; do
+    for z in "${zones_primary[@]}" "${zones_other[@]}"; do
       if [[ "$seen" != *" $z "* ]]; then
-        zones+=("$z")
+        attempts+=("$primary_type:$z")
         seen+="$z "
       fi
     done
+    if [[ "$primary_type" != "$fallback_type" ]]; then
+      seen=" "
+      for z in "${zones_primary[@]}" "${zones_other[@]}"; do
+        if [[ "$seen" != *" $z "* ]]; then
+          attempts+=("$fallback_type:$z")
+          seen+="$z "
+        fi
+      done
+    fi
   fi
 
   local created=""
   local create_err=""
-  for z in "${zones[@]}"; do
-    echo "==> Attempting zone: $z"
+  for attempt in "${attempts[@]}"; do
+    local mtype="${attempt%%:*}"
+    local z="${attempt##*:}"
+    echo "==> Attempting $mtype in $z"
     if create_err=$(gcloud compute instances create "$VM_NAME" \
         --zone="$z" \
         --project="$GCLOUD_PROJECT" \
-        --machine-type=n2-standard-2 \
+        --machine-type="$mtype" \
         --image-family=debian-12 \
         --image-project=debian-cloud \
         --boot-disk-size=50GB \
@@ -131,18 +150,18 @@ create_vm() {
         --quiet 2>&1); then
       GCLOUD_ZONE="$z"
       created="yes"
-      echo "==> Created in zone: $GCLOUD_ZONE"
+      echo "==> Created $mtype in zone: $GCLOUD_ZONE"
       break
     fi
     if [[ "$create_err" == *"ZONE_RESOURCE_POOL_EXHAUSTED"* ]]; then
-      echo "==> Zone $z exhausted, trying next..."
+      echo "==> Exhausted ($mtype in $z), trying next..."
       continue
     fi
     echo "$create_err" >&2
-    die "VM creation failed in zone $z (not a capacity issue)"
+    die "VM creation failed for $mtype in $z (not a capacity issue)"
   done
 
-  [[ -n "$created" ]] || die "VM creation failed in all zones (capacity exhausted everywhere)"
+  [[ -n "$created" ]] || die "VM creation failed in every (machine-type, zone) combination — capacity exhausted everywhere we tried"
 
   VM_IP=$(gcloud compute instances describe "$VM_NAME" \
     --zone="$GCLOUD_ZONE" \
