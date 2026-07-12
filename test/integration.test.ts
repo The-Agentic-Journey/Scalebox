@@ -863,10 +863,30 @@ describe("Firecracker API", () => {
 
 	// === Phase 1: VM Restart & Disk-Preserving Recovery (stubs) ===
 	describe("VM Restart", () => {
-		test.skip("restart power-cycles a running VM (boot_id changes)", async () => {
-			void sbVmRestart;
-			throw new Error("not implemented");
-		});
+		test(
+			"restart power-cycles a running VM (boot_id changes)",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				const port = vm.ssh_port as number;
+
+				await waitForSsh(port, 90000);
+				const bootId1 = (await sshExec(port, "cat /proc/sys/kernel/random/boot_id")).trim();
+
+				const res = await api.post(`/vms/${vm.id}/restart`, {});
+				expect(res.status).toBe(200);
+				expect(res.body.status).toBe("running");
+				expect(res.body.ssh_port).toBe(port);
+
+				// Load-bearing: wait for the guest to finish rebooting before reading boot_id.
+				await waitForSsh(port, 90000);
+				const bootId2 = (await sshExec(port, "cat /proc/sys/kernel/random/boot_id")).trim();
+
+				expect(bootId2).not.toBe(bootId1);
+				expect(bootId2.length).toBeGreaterThan(0);
+			},
+			{ timeout: 240000 },
+		);
 
 		test.skip("restart with disk_size_gib grows guest disk", async () => {
 			throw new Error("not implemented");
@@ -880,20 +900,65 @@ describe("Firecracker API", () => {
 			throw new Error("not implemented");
 		});
 
-		test.skip("restart nonexistent VM returns 404", async () => {
-			throw new Error("not implemented");
+		test("restart nonexistent VM returns 404", async () => {
+			const res = await api.post("/vms/vm-000000000000/restart", {});
+			expect(res.status).toBe(404);
 		});
 
-		test.skip("restart rejects disk shrink", async () => {
-			throw new Error("not implemented");
-		});
+		test(
+			"restart rejects disk shrink",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
 
-		test.skip("restart rejects invalid overrides", async () => {
-			throw new Error("not implemented");
-		});
+				const res = await api.post(`/vms/${vm.id}/restart`, { disk_size_gib: 1 });
+				expect(res.status).toBe(400);
+			},
+			{ timeout: 60000 },
+		);
 
-		test.skip("CLI vm restart power-cycles a VM", async () => {
-			throw new Error("not implemented");
-		});
+		test(
+			"restart rejects invalid overrides",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+
+				const invalidBodies = [
+					{ disk_size_gib: 0 },
+					{ disk_size_gib: 101 },
+					{ vcpu_count: 0 },
+					{ vcpu_count: 33 },
+					{ mem_size_mib: 64 },
+					{ mem_size_mib: 70000 },
+				];
+
+				for (const body of invalidBodies) {
+					const res = await api.post(`/vms/${vm.id}/restart`, body);
+					expect(res.status).toBe(400);
+				}
+			},
+			{ timeout: 60000 },
+		);
+
+		test(
+			"CLI vm restart power-cycles a VM",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				const port = vm.ssh_port as number;
+
+				await waitForSsh(port, 90000);
+				const bootId1 = (await sshExec(port, "cat /proc/sys/kernel/random/boot_id")).trim();
+
+				const out = await sbVmRestart(vm.id as string);
+				expect(out.status).toBe("running");
+
+				await waitForSsh(port, 90000);
+				const bootId2 = (await sshExec(port, "cat /proc/sys/kernel/random/boot_id")).trim();
+
+				expect(bootId2).not.toBe(bootId1);
+			},
+			{ timeout: 240000 },
+		);
 	});
 });

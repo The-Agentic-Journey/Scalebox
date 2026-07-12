@@ -540,6 +540,40 @@ cmd_vm_snapshot() {
   fi
 }
 
+cmd_vm_restart() {
+  need_config
+  local id="${1:-}"
+  local disk="" vcpu="" mem=""
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d|--disk-size) disk="$2"; shift 2 ;;
+      --vcpu)         vcpu="$2"; shift 2 ;;
+      -m|--mem)       mem="$2";  shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+  [[ -n "$id" ]] || die "Usage: sb vm restart <name|id> [--disk-size GIB] [--vcpu N] [--mem MIB]"
+
+  local json_body
+  json_body=$(jq -n \
+    --argjson d "${disk:-null}" \
+    --argjson v "${vcpu:-null}" \
+    --argjson m "${mem:-null}" \
+    '{}
+      + (if $d != null then {disk_size_gib: $d} else {} end)
+      + (if $v != null then {vcpu_count: $v} else {} end)
+      + (if $m != null then {mem_size_mib: $m} else {} end)')
+
+  local response
+  if response=$(api POST "/vms/$id/restart" -d "$json_body"); then
+    echo "$response" | output_single
+  else
+    echo "$response"
+    return 1
+  fi
+}
+
 cmd_vm_wait() {
   need_config
   local id="${1:-}"
@@ -874,6 +908,8 @@ Commands:
   vm get <name|id>              Get VM details
   vm delete <name|id>           Delete VM
   vm snapshot <name|id> -n NAME Snapshot VM to template
+  vm restart <name|id> [--disk-size GIB] [--vcpu N] [--mem MIB]
+                                Reboot VM in place (optionally resize disk/CPU/memory)
   vm wait <name|id> --ssh       Wait for SSH to be ready
 
   go [-t TPL] [-k KEY] [-d DISK] [-m MEM] [--env K=V]... [--file PATH:@FILE]... [--init-script FILE]
@@ -968,8 +1004,9 @@ main() {
         get) shift 2; cmd_vm_get "$@" ;;
         delete) shift 2; cmd_vm_delete "$@" ;;
         snapshot) shift 2; cmd_vm_snapshot "$@" ;;
+        restart) shift 2; cmd_vm_restart "$@" ;;
         wait) shift 2; cmd_vm_wait "$@" ;;
-        *) die "Usage: sb vm [list|create|get|delete|snapshot|wait]" ;;
+        *) die "Usage: sb vm [list|create|get|delete|snapshot|restart|wait]" ;;
       esac
       ;;
     connect) shift; cmd_connect "$@" ;;

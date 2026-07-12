@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { config } from "./config";
@@ -9,10 +10,12 @@ import { getCpuUsage, getMemoryStats, getStorageStats } from "./services/system"
 import { deleteTemplate, listTemplates } from "./services/template";
 import { cleanupOrphanedUdpRules } from "./services/udpProxy";
 import {
+	type RestartVmOptions,
 	createVm,
 	deleteVm,
 	findVm,
 	recoverVms,
+	restartVm,
 	saveState,
 	snapshotVm,
 	vmToResponse,
@@ -209,6 +212,74 @@ app.delete("/vms/:id", async (c) => {
 	await deleteVm(vm);
 	await updateCaddyConfig();
 	return c.body(null, 204);
+});
+
+app.post("/vms/:id/restart", async (c) => {
+	const vm = findVm(c.req.param("id"));
+	if (!vm) return c.json({ error: "VM not found" }, 404);
+
+	// biome-ignore lint/suspicious/noExplicitAny: parsed JSON body is dynamically shaped
+	let body: any = {};
+	const raw = await c.req.text();
+	if (raw.trim().length > 0) {
+		try {
+			body = JSON.parse(raw);
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+	}
+
+	const opts: RestartVmOptions = {};
+
+	if (body.disk_size_gib !== undefined) {
+		if (
+			!Number.isInteger(body.disk_size_gib) ||
+			body.disk_size_gib < 1 ||
+			body.disk_size_gib > config.maxDiskSizeGib
+		) {
+			return c.json(
+				{ error: `disk_size_gib must be an integer between 1 and ${config.maxDiskSizeGib}` },
+				400,
+			);
+		}
+		const currentGib = Math.floor(statSync(vm.rootfsPath).size / 1024 ** 3);
+		if (body.disk_size_gib < currentGib) {
+			return c.json(
+				{ error: `disk_size_gib cannot be smaller than current size (${currentGib}GiB)` },
+				400,
+			);
+		}
+		opts.diskSizeGib = body.disk_size_gib;
+	}
+
+	if (body.vcpu_count !== undefined) {
+		if (!Number.isInteger(body.vcpu_count) || body.vcpu_count < 1 || body.vcpu_count > 32) {
+			return c.json({ error: "vcpu_count must be an integer between 1 and 32" }, 400);
+		}
+		opts.vcpuCount = body.vcpu_count;
+	}
+
+	if (body.mem_size_mib !== undefined) {
+		if (
+			!Number.isInteger(body.mem_size_mib) ||
+			body.mem_size_mib < 128 ||
+			body.mem_size_mib > 65536
+		) {
+			return c.json({ error: "mem_size_mib must be an integer between 128 and 65536" }, 400);
+		}
+		opts.memSizeMib = body.mem_size_mib;
+	}
+
+	try {
+		return await withVmCreationLock(async () => {
+			const updated = await restartVm(vm, opts);
+			return c.json(vmToResponse(updated), 200);
+		});
+	} catch (e: unknown) {
+		console.error("VM restart failed:", e);
+		const err = e as { status?: number; message?: string };
+		return c.json({ error: err.message || "Unknown error" }, err.status || 500);
+	}
 });
 
 app.get("/metrics", (c) => {

@@ -325,6 +325,56 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 	}
 }
 
+export interface RestartVmOptions {
+	diskSizeGib?: number;
+	vcpuCount?: number;
+	memSizeMib?: number;
+}
+
+export async function restartVm(vm: VM, _opts: RestartVmOptions): Promise<VM> {
+	// (1) Stop the existing Firecracker process if it is running.
+	if (processExists(vm.pid)) {
+		await stopFirecracker(vm.pid);
+		for (let i = 0; i < 50 && processExists(vm.pid); i++) {
+			await Bun.sleep(100);
+		}
+		if (processExists(vm.pid)) {
+			throw { status: 500, message: "Failed to stop existing VM process" };
+		}
+	}
+
+	// (2) Phase 3: overrides wired in Phase 4 — reuse persisted vcpu/mem, no resize.
+	const vcpuCount = vm.vcpuCount;
+	const memSizeMib = vm.memSizeMib;
+
+	// (3) Recreate the TAP device if it was torn down while the VM was stopped.
+	if (!existsSync(`/sys/class/net/${vm.tapDevice}`)) {
+		await createTapDevice(vm.tapDevice);
+	}
+
+	// (4) Relaunch Firecracker with the same IP/rootfs/network configuration.
+	const pid = await startFirecracker({
+		socketPath: vm.socketPath,
+		kernelPath: config.kernelPath,
+		rootfsPath: vm.rootfsPath,
+		bootArgs: buildKernelArgs(vm.ip),
+		tapDevice: vm.tapDevice,
+		macAddress: vmIdToMac(vm.id),
+		vcpuCount,
+		memSizeMib,
+	});
+
+	// (5) Persist the new process state.
+	vm.pid = pid;
+	vm.vcpuCount = vcpuCount;
+	vm.memSizeMib = memSizeMib;
+	vms.set(vm.id, vm);
+	saveState();
+
+	// (6)
+	return vm;
+}
+
 export async function deleteVm(vm: VM): Promise<void> {
 	// Stop UDP proxy for mosh
 	await stopUdpProxy(vm.id);
