@@ -5,6 +5,8 @@ export interface VM {
 	ip: string;
 	port: number;
 	pid: number;
+	vcpuCount: number;
+	memSizeMib: number;
 	socketPath: string;
 	rootfsPath: string;
 	tapDevice: string;

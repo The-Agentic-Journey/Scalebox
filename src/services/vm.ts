@@ -52,6 +52,8 @@ interface PersistedVM {
 	tapDevice: string;
 	sshPort: number;
 	pid: number;
+	vcpuCount: number;
+	memSizeMib: number;
 	socketPath: string;
 	rootfsPath: string;
 	createdAt: string;
@@ -66,6 +68,8 @@ export function saveState(): void {
 		tapDevice: vm.tapDevice,
 		sshPort: vm.port,
 		pid: vm.pid,
+		vcpuCount: vm.vcpuCount,
+		memSizeMib: vm.memSizeMib,
 		socketPath: vm.socketPath,
 		rootfsPath: vm.rootfsPath,
 		createdAt: vm.createdAt.toISOString(),
@@ -145,6 +149,8 @@ export async function recoverVms(): Promise<void> {
 				ip: saved.ip,
 				port: saved.sshPort,
 				pid: saved.pid,
+				vcpuCount: saved.vcpuCount ?? config.defaultVcpuCount,
+				memSizeMib: saved.memSizeMib ?? config.defaultMemSizeMib,
 				socketPath: saved.socketPath,
 				rootfsPath: saved.rootfsPath,
 				tapDevice: saved.tapDevice,
@@ -243,6 +249,8 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 
 		// Start Firecracker
 		console.log(`[${vmId}] Starting Firecracker...`);
+		const vcpuCount = req.vcpu_count || config.defaultVcpuCount;
+		const memSizeMib = req.mem_size_mib || config.defaultMemSizeMib;
 		const pid = await startFirecracker({
 			socketPath,
 			kernelPath: config.kernelPath,
@@ -250,8 +258,8 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 			bootArgs: buildKernelArgs(ip),
 			tapDevice,
 			macAddress: vmIdToMac(vmId),
-			vcpuCount: req.vcpu_count || config.defaultVcpuCount,
-			memSizeMib: req.mem_size_mib || config.defaultMemSizeMib,
+			vcpuCount,
+			memSizeMib,
 		});
 
 		// Start TCP proxy for SSH
@@ -275,6 +283,8 @@ export async function createVm(req: CreateVMRequest): Promise<VM> {
 			ip,
 			port,
 			pid,
+			vcpuCount,
+			memSizeMib,
 			socketPath,
 			rootfsPath,
 			tapDevice,
