@@ -106,6 +106,47 @@ async function cleanupDeadVm(saved: PersistedVM): Promise<void> {
 	} catch {}
 }
 
+async function relaunchVm(saved: PersistedVM): Promise<void> {
+	allocateSpecificPort(saved.sshPort);
+	allocateSpecificIp(saved.ip);
+
+	if (!existsSync(`/sys/class/net/${saved.tapDevice}`)) {
+		await createTapDevice(saved.tapDevice);
+	}
+
+	const vcpuCount = saved.vcpuCount ?? config.defaultVcpuCount;
+	const memSizeMib = saved.memSizeMib ?? config.defaultMemSizeMib;
+
+	const pid = await startFirecracker({
+		socketPath: saved.socketPath,
+		kernelPath: config.kernelPath,
+		rootfsPath: saved.rootfsPath,
+		bootArgs: buildKernelArgs(saved.ip),
+		tapDevice: saved.tapDevice,
+		macAddress: vmIdToMac(saved.id),
+		vcpuCount,
+		memSizeMib,
+	});
+
+	await startProxy(saved.id, saved.sshPort, saved.ip, 22);
+	await startUdpProxy(saved.id, saved.sshPort, saved.ip, saved.sshPort);
+
+	vms.set(saved.id, {
+		id: saved.id,
+		name: saved.name,
+		template: saved.templateName,
+		ip: saved.ip,
+		port: saved.sshPort,
+		pid,
+		vcpuCount,
+		memSizeMib,
+		socketPath: saved.socketPath,
+		rootfsPath: saved.rootfsPath,
+		tapDevice: saved.tapDevice,
+		createdAt: new Date(saved.createdAt),
+	});
+}
+
 export async function recoverVms(): Promise<void> {
 	if (!existsSync(STATE_FILE)) {
 		console.log("[recovery] No state file found, starting fresh");
@@ -157,8 +198,19 @@ export async function recoverVms(): Promise<void> {
 				createdAt: new Date(saved.createdAt),
 			});
 		} else {
-			console.log(`[recovery] VM ${saved.id} (${saved.name}) process died, cleaning up`);
-			await cleanupDeadVm(saved);
+			if (existsSync(saved.rootfsPath)) {
+				console.log(
+					`[recovery] VM ${saved.id} (${saved.name}) process not running but rootfs exists — relaunching`,
+				);
+				try {
+					await relaunchVm(saved);
+				} catch (err) {
+					console.error(`[recovery] Failed to relaunch ${saved.id}:`, err);
+				}
+			} else {
+				console.log(`[recovery] VM ${saved.id} (${saved.name}) rootfs missing — cleaning up`);
+				await cleanupDeadVm(saved);
+			}
 		}
 	}
 

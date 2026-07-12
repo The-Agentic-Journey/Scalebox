@@ -591,6 +591,105 @@ test_reconciliation() {
   curl -sf -X DELETE "$api/vms/$vm_id" \
     -H "Authorization: Bearer $token" >/dev/null
 
+  # --- Sub-test: VM with dead process is relaunched on restart ---
+  echo "==> Test: VM with dead process is relaunched on restart..."
+
+  # Create a VM
+  local relaunch_result
+  relaunch_result=$(curl -sf -X POST "$api/vms" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "{\"template\": \"debian-base\", \"ssh_public_key\": \"$(cat test/fixtures/test_key.pub)\"}")
+
+  local relaunch_id
+  relaunch_id=$(echo "$relaunch_result" | jq -r '.id')
+  [[ "$relaunch_id" == vm-* ]] || die "Failed to create VM for relaunch test: $relaunch_result"
+  echo "    Created VM: $relaunch_id"
+
+  # Capture the old Firecracker PID on the host
+  local old_pid
+  old_pid=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="pgrep -f firecracker-${relaunch_id}.sock" \
+    --quiet)
+  old_pid=$(echo "$old_pid" | tr -d '[:space:]')
+  [[ -n "$old_pid" ]] || die "Could not find Firecracker PID for $relaunch_id"
+  echo "    Old Firecracker PID: $old_pid"
+
+  # Kill the Firecracker process hard (simulates a crash)
+  echo "    Killing Firecracker process $old_pid..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo kill -9 $old_pid" \
+    --quiet
+
+  # Restart scaleboxd (state.json stays intact)
+  echo "    Restarting scaleboxd..."
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo systemctl restart scaleboxd" \
+    --quiet
+
+  # Wait for health
+  echo "    Waiting for scaleboxd..."
+  local retries=30
+  while [[ $retries -gt 0 ]]; do
+    if curl -sf "$api/health" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+    ((retries--)) || true
+  done
+  [[ $retries -gt 0 ]] || die "scaleboxd did not become healthy after relaunch test restart"
+
+  # Verify VM is still present (not deleted)
+  local relaunch_list
+  relaunch_list=$(curl -sf "$api/vms" -H "Authorization: Bearer $token")
+  echo "$relaunch_list" | jq -e ".vms[] | select(.id == \"$relaunch_id\")" >/dev/null \
+    || die "VM $relaunch_id not found after restart — it was deleted instead of relaunched"
+  echo "    PASS: VM still present after restart"
+
+  # Verify a new Firecracker process is running with a different PID
+  local new_pid
+  new_pid=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="pgrep -f firecracker-${relaunch_id}.sock" \
+    --quiet)
+  new_pid=$(echo "$new_pid" | tr -d '[:space:]')
+  [[ -n "$new_pid" ]] || die "No Firecracker process running for $relaunch_id after relaunch"
+  [[ "$new_pid" != "$old_pid" ]] || die "Firecracker PID unchanged ($new_pid) — VM was not relaunched"
+  echo "    New Firecracker PID: $new_pid"
+  echo "    PASS: VM relaunched with new PID"
+
+  # Verify rootfs still exists on host
+  gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="ls /var/lib/scalebox/vms/${relaunch_id}.ext4" \
+    --quiet >/dev/null \
+    || die "Rootfs for $relaunch_id missing after relaunch"
+  echo "    PASS: Rootfs preserved"
+
+  # Verify the relaunch log message is present
+  local relaunch_logs
+  relaunch_logs=$(gcloud compute ssh "$VM_NAME" \
+    --zone="$GCLOUD_ZONE" \
+    --project="$GCLOUD_PROJECT" \
+    --command="sudo journalctl -u scaleboxd --no-pager -n 100" \
+    --quiet)
+  echo "$relaunch_logs" | grep -q "process not running but rootfs exists — relaunching" \
+    || die "Expected relaunch log message not found in scaleboxd journal"
+  echo "    PASS: Relaunch log message present"
+
+  # Clean up the test VM
+  curl -sf -X DELETE "$api/vms/$relaunch_id" \
+    -H "Authorization: Bearer $token" >/dev/null
+  echo "    Cleaned up VM: $relaunch_id"
+
   # --- Sub-test: Orphan cleanup ---
   echo "==> Test: Orphan cleanup on startup..."
 
