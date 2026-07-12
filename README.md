@@ -184,6 +184,7 @@ scalebox vm list                       # List all VMs
 scalebox vm create -t TPL -k "KEY"     # Create VM from template
 scalebox vm get <id>                   # Get VM details
 scalebox vm delete <id>                # Delete VM
+scalebox vm restart <id> [--disk-size GIB] [--vcpu N] [--mem MIB]  # Reboot VM in place (optionally resize)
 scalebox vm snapshot <id> -n NAME      # Snapshot VM to template
 scalebox template list                 # List templates
 scalebox template delete <name>        # Delete template
@@ -202,6 +203,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 | POST | `/vms` | Create VM |
 | GET | `/vms/:id` | Get VM details |
 | DELETE | `/vms/:id` | Delete VM |
+| POST | `/vms/:id/restart` | Restart VM in place (optionally resize disk/CPU/memory) |
 | POST | `/vms/:id/snapshot` | Snapshot to template |
 
 ### Example: Create VM

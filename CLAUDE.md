@@ -172,7 +172,7 @@ All VM operations go through `src/services/vm.ts`. It orchestrates:
 
 ### In-Memory State
 
-VMs are stored in a Map, not persisted. On restart, all VMs are lost. Templates are the persistent state.
+VMs are stored in a Map, with metadata persisted to `state.json`. On daemon or host restart, VMs are reconnected (live Firecracker process) or relaunched (dead process with an intact rootfs); a VM's rootfs is only removed by explicit deletion or when the rootfs file is missing. Templates are the persistent state.
 
 ### Copy-on-Write Storage
 
