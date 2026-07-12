@@ -33,6 +33,8 @@ interface VM {
   ip: string;           // Allocated private IP (172.16.x.x)
   port: number;         // Allocated SSH proxy port
   pid: number;          // Firecracker process ID
+  vcpuCount: number;    // Allocated vCPU count
+  memSizeMib: number;   // Allocated RAM in MiB
   socketPath: string;   // Firecracker control socket
   rootfsPath: string;   // Path to VM's rootfs image
   tapDevice: string;    // Network interface name
@@ -57,12 +59,12 @@ interface VM {
                          ▼
                     ┌─────────┐
          ┌─────────│ Running │─────────┐
-         │         └─────────┘         │
-         │ snapshot     │              │
-         ▼              │ delete       │
-    ┌─────────┐         │              │
-    │ Paused  │─────────┘              │
-    └─────────┘                        │
+         │         └─────────┘◄──┐     │
+         │ snapshot     │        │     │
+         ▼              │ delete │     │
+    ┌─────────┐         │        │ restart
+    │ Paused  │─────────┘        │     │
+    └─────────┘                  └─────┘
          │ (auto-resume)               │
          └─────────────────────────────┤
                                        ▼
@@ -71,7 +73,34 @@ interface VM {
                                   └─────────┘
 ```
 
-**Note:** Paused state is internal only (during snapshot). API consumers only see "running" or deleted.
+**Note:** Paused state is internal only (during snapshot). API consumers only see "running" or deleted. `restart` is a self-transition (`Running --restart--> Running`): Firecracker is power-cycled in place while the VM keeps its identity, IP, port, and rootfs.
+
+### Recovery paths (on startup)
+
+On startup, `recoverVms()` replays each persisted VM from `state.json`:
+
+```
+        ┌──────────────────────┐
+        │ persisted VM in       │
+        │ state.json            │
+        └──────────┬───────────┘
+                   │
+        ┌──────────┴───────────┐
+        │ Firecracker PID alive?│
+        └──────────┬───────────┘
+           yes     │      no
+        ┌──────────┘      └──────────┐
+        ▼                            ▼
+   reconnect              ┌────────────────────┐
+   (re-register           │ rootfs present?     │
+   proxies) → Running     └─────────┬──────────┘
+                             yes     │     no
+                          ┌──────────┘     └──────────┐
+                          ▼                           ▼
+                     relaunch                     removed
+                     (start Firecracker           (cleanup dead
+                     + proxies) → Running          resources)
+```
 
 ---
 
@@ -96,12 +125,15 @@ interface VMResponse {
   id: string;
   name: string;
   template: string;
-  ip: string;           // Host IP (for client connections, not internal bridge IP)
+  ip: string;                // Host IP (for client connections, not internal bridge IP)
   ssh_port: number;
-  ssh: string;           // Convenience: full SSH command
-  url: string | null;    // HTTPS URL if baseDomain configured
+  ssh: string;               // Convenience: full SSH command
+  url: string | null;        // HTTPS URL if baseDomain configured
   status: "running" | "stopped";
   created_at: string;
+  console_log_path: string;  // Path to the VM's serial console log
+  console_log_size: number;  // Current size of the console log in bytes
+  degraded: boolean;         // True if the VM is flagged degraded by metrics
 }
 ```
 
@@ -157,6 +189,22 @@ Orchestrates VM deletion:
 6. Release port (Networking)
 7. Remove VM from memory
 ```
+
+### restartVm(vm: VM, opts: RestartVmOptions): Promise<VM>
+
+Power-cycles an existing VM in place, optionally resizing its disk or changing its vCPU/memory:
+
+```
+1. Stop Firecracker if the process is running (Hypervisor), waiting for exit
+2. If a new disk size is requested: check available space (Storage) then grow rootfs offline (Storage)
+3. Resolve vCPU/memory (overrides, falling back to persisted values)
+4. Recreate the TAP device if it was torn down while stopped (Networking)
+5. Start Firecracker with the same IP/rootfs/TAP/MAC (Hypervisor)
+6. Persist the new pid/vcpuCount/memSizeMib and save state
+7. Return the updated VM
+```
+
+The VM keeps its ID, name, IP, SSH port, TAP device, and rootfs, so the TCP/UDP proxies and Caddy configuration are left untouched (IP and name are unchanged). Only the disk may grow — it is never shrunk.
 
 ### snapshotVm(vm: VM, templateName: string): Promise<SnapshotResponse>
 
@@ -220,7 +268,7 @@ const vms = new Map<string, VM>();
 ```
 
 - **Persisted to disk:** VM state is saved to `/var/lib/scalebox/vms/state.json` after every creation and deletion
-- **Recovery on startup:** `recoverVms()` reads state.json, checks if Firecracker PIDs are alive, and reconnects or cleans up dead VMs
+- **Recovery on startup:** `recoverVms()` reads state.json, checks if Firecracker PIDs are alive, and either reconnects (live process), **relaunches** (dead process, rootfs present), or cleans up (rootfs missing)
 - **Reconciliation on startup:** `reconcileOrphans()` scans for system resources not tracked in the VM Map and cleans them up (orphaned processes, TAP devices, rootfs files)
 - **Exported:** Accessed by Access context for Caddy configuration
 

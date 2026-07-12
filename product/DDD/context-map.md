@@ -138,6 +138,8 @@ See [CLI Context](contexts/cli.md) for details on the CLI's local state manageme
 - VM creation starts Firecracker process
 - VM deletion stops Firecracker process
 - Snapshotting pauses/resumes VM
+- Restart power-cycles the Firecracker process in place
+- Recovery relaunch restarts Firecracker for a persisted VM whose process died but whose rootfs survives
 
 ### [VM Lifecycle](contexts/vm-lifecycle.md) → [Access](contexts/access.md)
 **Relationship:** Customer-Supplier
@@ -145,6 +147,7 @@ See [CLI Context](contexts/cli.md) for details on the CLI's local state manageme
 **Integration:**
 - VM creation starts TCP proxy and UDP proxy
 - VM deletion stops TCP proxy and UDP proxy
+- Recovery relaunch re-registers TCP and UDP proxies for a persisted VM whose rootfs survives
 - VM creation/deletion triggers Caddy config update
 - Server startup cleans up orphaned UDP rules
 
