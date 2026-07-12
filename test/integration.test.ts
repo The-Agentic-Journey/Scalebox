@@ -888,17 +888,63 @@ describe("Firecracker API", () => {
 			{ timeout: 240000 },
 		);
 
-		test.skip("restart with disk_size_gib grows guest disk", async () => {
-			throw new Error("not implemented");
-		});
+		test(
+			"restart with disk_size_gib grows guest disk",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				const port = vm.ssh_port as number;
 
-		test.skip("restart with vcpu_count changes nproc", async () => {
-			throw new Error("not implemented");
-		});
+				await waitForSsh(port, 90000);
+				const oldBytes = Number((await sshExec(port, "df -B1 --output=size / | tail -1")).trim());
 
-		test.skip("restart with mem_size_mib changes MemTotal", async () => {
-			throw new Error("not implemented");
-		});
+				const res = await api.post(`/vms/${vm.id}/restart`, { disk_size_gib: 14 });
+				expect(res.status).toBe(200);
+
+				await waitForSsh(port, 90000);
+				const newBytes = Number((await sshExec(port, "df -B1 --output=size / | tail -1")).trim());
+
+				expect(newBytes).toBeGreaterThan(oldBytes);
+				expect(newBytes).toBeGreaterThanOrEqual(12 * 1024 ** 3);
+			},
+			{ timeout: 240000 },
+		);
+
+		test(
+			"restart with vcpu_count changes nproc",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				const port = vm.ssh_port as number;
+
+				const res = await api.post(`/vms/${vm.id}/restart`, { vcpu_count: 1 });
+				expect(res.status).toBe(200);
+
+				await waitForSsh(port, 90000);
+				expect((await sshExec(port, "nproc")).trim()).toBe("1");
+			},
+			{ timeout: 240000 },
+		);
+
+		test(
+			"restart with mem_size_mib changes MemTotal",
+			async () => {
+				const vm = await sbVmCreate("debian-base");
+				createdVmIds.push(vm.id as string);
+				const port = vm.ssh_port as number;
+
+				const res = await api.post(`/vms/${vm.id}/restart`, { mem_size_mib: 1024 });
+				expect(res.status).toBe(200);
+
+				await waitForSsh(port, 90000);
+				const kb = Number(
+					(await sshExec(port, "awk '/MemTotal/ {print $2}' /proc/meminfo")).trim(),
+				);
+				expect(kb).toBeGreaterThan(800000);
+				expect(kb).toBeLessThan(1200000);
+			},
+			{ timeout: 240000 },
+		);
 
 		test("restart nonexistent VM returns 404", async () => {
 			const res = await api.post("/vms/vm-000000000000/restart", {});

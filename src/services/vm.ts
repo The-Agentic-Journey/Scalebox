@@ -331,7 +331,7 @@ export interface RestartVmOptions {
 	memSizeMib?: number;
 }
 
-export async function restartVm(vm: VM, _opts: RestartVmOptions): Promise<VM> {
+export async function restartVm(vm: VM, opts: RestartVmOptions): Promise<VM> {
 	// (1) Stop the existing Firecracker process if it is running.
 	if (processExists(vm.pid)) {
 		await stopFirecracker(vm.pid);
@@ -343,9 +343,15 @@ export async function restartVm(vm: VM, _opts: RestartVmOptions): Promise<VM> {
 		}
 	}
 
-	// (2) Phase 3: overrides wired in Phase 4 — reuse persisted vcpu/mem, no resize.
-	const vcpuCount = vm.vcpuCount;
-	const memSizeMib = vm.memSizeMib;
+	// (2) Grow the rootfs offline while Firecracker is stopped.
+	if (opts.diskSizeGib !== undefined) {
+		await checkAvailableSpace(opts.diskSizeGib);
+		await resizeRootfs(vm.rootfsPath, opts.diskSizeGib);
+	}
+
+	// (3) Apply sizing overrides, falling back to persisted values.
+	const vcpuCount = opts.vcpuCount ?? vm.vcpuCount;
+	const memSizeMib = opts.memSizeMib ?? vm.memSizeMib;
 
 	// (3) Recreate the TAP device if it was torn down while the VM was stopped.
 	if (!existsSync(`/sys/class/net/${vm.tapDevice}`)) {
