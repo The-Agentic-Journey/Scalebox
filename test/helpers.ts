@@ -53,6 +53,21 @@ export const api = {
 		});
 		return { status: res.status };
 	},
+	async post(path: string, body: unknown, token?: string) {
+		const res = await apiFetch(path, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token ?? API_TOKEN}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+		let json = null;
+		try {
+			json = await res.json();
+		} catch {}
+		return { status: res.status, body: json };
+	},
 };
 
 // SSH via proxy port (connects to VM_HOST on the proxy port, not internal IP)
@@ -259,6 +274,21 @@ export async function sbVmSnapshot(
 	const result = await sbCmd(...args);
 	if (result.exitCode !== 0 || !result.data) {
 		throw new Error(`Failed to snapshot VM: ${result.error}`);
+	}
+	return result.data;
+}
+
+export async function sbVmRestart(
+	nameOrId: string,
+	opts: { diskSizeGib?: number; vcpuCount?: number; memSizeMib?: number } = {},
+): Promise<Record<string, unknown>> {
+	const args = ["vm", "restart", nameOrId];
+	if (opts.diskSizeGib !== undefined) args.push("--disk-size", String(opts.diskSizeGib));
+	if (opts.vcpuCount !== undefined) args.push("--vcpu", String(opts.vcpuCount));
+	if (opts.memSizeMib !== undefined) args.push("--mem", String(opts.memSizeMib));
+	const result = await sbCmd(...args);
+	if (result.exitCode !== 0 || !result.data) {
+		throw new Error(`Failed to restart VM: ${result.error}`);
 	}
 	return result.data;
 }

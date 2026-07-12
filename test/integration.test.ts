@@ -22,6 +22,7 @@ import {
 	sbVmDelete,
 	sbVmGet,
 	sbVmList,
+	sbVmRestart,
 	sbVmSnapshot,
 	sbVmSnapshotRaw,
 	sbVmWait,
@@ -858,5 +859,41 @@ describe("Firecracker API", () => {
 			},
 			{ timeout: 60000 },
 		);
+	});
+
+	// === Phase 1: VM Restart & Disk-Preserving Recovery (stubs) ===
+	describe("VM Restart", () => {
+		test.skip("restart power-cycles a running VM (boot_id changes)", async () => {
+			void sbVmRestart;
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart with disk_size_gib grows guest disk", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart with vcpu_count changes nproc", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart with mem_size_mib changes MemTotal", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart nonexistent VM returns 404", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart rejects disk shrink", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("restart rejects invalid overrides", async () => {
+			throw new Error("not implemented");
+		});
+
+		test.skip("CLI vm restart power-cycles a VM", async () => {
+			throw new Error("not implemented");
+		});
 	});
 });
